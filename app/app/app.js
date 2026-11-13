@@ -535,6 +535,56 @@
       fr.contentWindow.focus(); fr.contentWindow.print();
     }, 250);
   }
+  // Guardar el comprobante como PDF, con el mismo diseño y tamaño que el formato de impresión elegido.
+  var pdfLibs = null;
+  function loadScript(src) {
+    return new Promise(function (ok, bad) {
+      var sc = document.createElement('script'); sc.src = src; sc.onload = ok;
+      sc.onerror = function () { bad(new Error('No se pudo cargar el generador de PDF. Revisá la conexión a internet.')); };
+      document.head.appendChild(sc);
+    });
+  }
+  function loadPdfLibs() {
+    if (!pdfLibs) {
+      pdfLibs = Promise.all([
+        loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js'),
+        loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js')
+      ]).catch(function (e) { pdfLibs = null; throw e; });
+    }
+    return pdfLibs;
+  }
+  function saveSalePdf(s, f) {
+    var PX = 96 / 25.4; // px por mm
+    return loadPdfLibs().then(function () {
+      var fr = document.createElement('iframe');
+      fr.setAttribute('aria-hidden', 'true');
+      fr.style.cssText = 'position:fixed;left:-10000px;top:0;border:0;background:#fff;width:' + Math.ceil(f.w * PX) + 'px;height:' + (f.label ? Math.ceil(f.h * PX) : f.v === 'a4' ? Math.ceil(297 * PX) : 40) + 'px'; // rollo: bajito para medir solo el contenido
+      document.body.appendChild(fr);
+      var doc = fr.contentWindow.document;
+      doc.open(); doc.write(printDoc(s, f)); doc.close();
+      var fix = doc.createElement('style'); // en pantalla no hay márgenes de impresora: se agregan los de la hoja A4
+      fix.textContent = 'html{overflow:hidden}' + (f.v === 'a4' ? 'html,body{margin:0}body{box-sizing:border-box;width:210mm;padding:14mm}' : '');
+      doc.head.appendChild(fix);
+      return new Promise(function (r) { setTimeout(r, 300); }).then(function () {
+        var body = doc.body, wPx = Math.ceil(f.w * PX), hPx = Math.max(body.scrollHeight, doc.documentElement.scrollHeight);
+        if (f.label) hPx = Math.ceil(f.h * PX);
+        return window.html2canvas(body, { scale: 3, backgroundColor: '#ffffff', width: wPx, height: hPx, windowWidth: wPx, windowHeight: hPx })
+          .then(function (canvas) {
+            var JsPDF = window.jspdf.jsPDF, w = f.w;
+            var contentH = canvas.height / canvas.width * w; // alto del contenido en mm
+            var pageH = f.label ? f.h : f.v === 'a4' ? 297 : Math.ceil(contentH) + 2; // rollo: una sola tira
+            var pdf = new JsPDF({ unit: 'mm', format: [w, pageH], orientation: w > pageH ? 'landscape' : 'portrait' });
+            var img = canvas.toDataURL('image/jpeg', 0.92), y = 0, first = true;
+            do { // A4 largo: varias páginas
+              if (!first) pdf.addPage([w, pageH], w > pageH ? 'landscape' : 'portrait');
+              pdf.addImage(img, 'JPEG', 0, -y, w, contentH);
+              y += pageH; first = false;
+            } while (f.v === 'a4' && y < contentH - 1);
+            pdf.save('Venta-' + s.number + '-' + (f.v === 'custom' ? f.w + 'x' + f.h : f.v) + '.pdf');
+          });
+      }).then(function () { fr.remove(); }, function (e) { fr.remove(); throw e; });
+    });
+  }
   function printFormatOptions(p) {
     return PRINT_FORMATS.map(function (x) { return '<option value="' + x.v + '"' + (x.v === p.f ? ' selected' : '') + '>' + esc(x.t) + '</option>'; }).join('');
   }
@@ -573,10 +623,15 @@
       '<div class="tot big"><span>Total</span><span>' + money(s.total) + '</span></div></div>' +
       '<p class="small muted" style="margin-top:14px">Comprobante interno, no válido como factura electrónica (CFE).</p></div>' +
       '<div class="form print-pick">' + printPickerHtml(printPrefs()) + '</div>' +
-      '<div class="foot"><button class="btn" data-close>Cerrar</button><button class="btn primary" id="print">Imprimir</button></div>';
+      '<div class="foot"><button class="btn" data-close>Cerrar</button><button class="btn" id="savePdf">Guardar PDF</button><button class="btn primary" id="print">Imprimir</button></div>';
     openModal('Venta N.º ' + s.number, html, function (m) {
       bindPrintPicker(m);
       $('#print', m).addEventListener('click', function () { printSale(s, printFormat(printPrefs())); });
+      $('#savePdf', m).addEventListener('click', function () {
+        var b = this, txt = b.textContent; b.disabled = true; b.textContent = 'Generando…';
+        saveSalePdf(s, printFormat(printPrefs())).then(function () { toast('PDF guardado en Descargas'); }, function (e) { toast(e.message || 'No se pudo generar el PDF', true); })
+          .then(function () { b.disabled = false; b.textContent = txt; });
+      });
     }, true);
   }
 
