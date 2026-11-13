@@ -33,8 +33,12 @@ function cleanProduct(b, old) {
   p.iva = IVAS.includes(int(b.iva)) ? int(b.iva) : 22;
   if (!old || b.stock !== undefined) p.stock = int(b.stock);
   p.minStock = Math.max(0, int(b.minStock));
+  p.list = listOf(b.list === undefined && old ? old.list : b.list);
   return p;
 }
+// Dos listas de precios: comercios (por defecto) y residenciales e instituciones.
+const LISTS = ['comercio', 'institucion'];
+const listOf = v => (v === 'institucion' ? 'institucion' : 'comercio');
 function cleanClient(b, old) {
   const c = Object.assign({}, old);
   c.name = str(b.name, 150); if (!c.name) fail(400, 'El cliente necesita un nombre.');
@@ -189,6 +193,8 @@ module.exports = function api() {
     const client = b.clientId ? await store.get('clients', String(b.clientId)) : null;
     if (b.clientId && (!client || !canSeeClient(req.user, client))) fail(400, 'El cliente no existe o no está asignado a tu usuario.');
     if (status === 'pendiente' && !client) fail(400, 'Elegí un cliente para dejar la venta pendiente de cobro.');
+    if (!LISTS.includes(b.list)) fail(400, 'Elegí si la venta es para un comercio o una institución.');
+    const list = b.list;
 
     const sale = await store.tx(async s => {
       const settings = await getSettings(s);
@@ -196,6 +202,7 @@ module.exports = function api() {
       for (const it of reqItems) {
         const qty = int(it.qty); if (qty < 1) fail(400, 'Cantidad inválida.');
         const p = await s.get('products', String(it.productId)); if (!p) fail(400, 'Un producto ya no existe. Recargá la página.');
+        if (listOf(p.list) !== list) fail(400, p.name + ' no es de la lista de ' + (list === 'institucion' ? 'instituciones' : 'comercios') + '. Recargá la página.');
         if (qty > p.stock) fail(409, 'Stock insuficiente de ' + p.name + ' (quedan ' + p.stock + ').');
         p.stock -= qty; products.push(p);
         items.push({ productId: p.id, name: p.name, code: p.code, qty, price: p.price, iva: p.iva, cost: p.cost });
@@ -207,7 +214,7 @@ module.exports = function api() {
         clientDoc: client ? client.doc || '' : '',
         deliveryAddress: str(b.deliveryAddress, 200) || (client ? client.address || '' : ''),
         deliveryPhone: str(b.deliveryPhone, 40) || (client ? client.phone || '' : ''),
-        items, discountPct, payment, status, notes: str(b.notes, 500),
+        list, items, discountPct, payment, status, notes: str(b.notes, 500),
         userId: req.user.id, userName: req.user.name
       }, calcSale(items, discountPct));
       settings.nextNumber++;
@@ -318,7 +325,7 @@ module.exports = function api() {
         const d = new Date(x.date);
         await s.put('sales', Object.assign({
           id: str(x.id, 90) || uid('s'), number, date: isNaN(d) ? new Date().toISOString() : d.toISOString(),
-          clientId: str(x.clientId, 90), clientName: str(x.clientName, 150) || 'Consumidor final', items, discountPct,
+          list: listOf(x.list), clientId: str(x.clientId, 90), clientName: str(x.clientName, 150) || 'Consumidor final', items, discountPct,
           clientDoc: str(x.clientDoc, 30), deliveryAddress: str(x.deliveryAddress, 200), deliveryPhone: str(x.deliveryPhone, 40),
           payment: PAYMENTS.includes(x.payment) ? x.payment : 'Efectivo', status: STATUSES.includes(x.status) ? x.status : 'pagada',
           notes: str(x.notes, 500), userId: str(x.userId, 90) || req.user.id, userName: str(x.userName, 100) || req.user.name

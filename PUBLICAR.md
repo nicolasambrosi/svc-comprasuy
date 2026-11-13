@@ -33,11 +33,19 @@ En hPanel → **Bases de datos → Administración** se crea una base MySQL. Des
 - Una vez creado el administrador, la contraseña se cambia desde la app (Configuración → Mi contraseña);
   cambiar `INITIAL_ADMIN_PASSWORD` después no tiene efecto.
 
-### Catálogo inicial
+### Dos listas de productos: comercios e instituciones
 
-`seed/catalogo-comprasuy.json` tiene los 172 productos del catálogo de Treinta (catalogo.treinta.co/comprasuycomercios)
-con categoría, presentación, precio con IVA, stock e imagen. Se carga solo **una vez**, al primer arranque con la base
-sin productos (queda marcado en la configuración). El IVA se cargó en 22% para todos: revisá los que lleven 10%.
+Cada producto pertenece a una lista (campo `list`): **comercio** (por defecto) o **institucion** (residenciales e instituciones).
+Antes de vender, y al entrar a Productos, la app pregunta "¿Comercio o institución?" y muestra solo los productos y precios
+de esa lista. Cada venta guarda su lista; en Ventas se puede filtrar por ella. El servidor rechaza una venta que mezcle listas.
+
+### Catálogos iniciales
+
+- `seed/catalogo-comprasuy.json`: los 172 productos de catalogo.treinta.co/comprasuycomercios (lista comercio).
+- `seed/catalogo-instituciones.json`: los 152 productos de catalogo.treinta.co/comprasuyresidenciales (lista institución),
+  categorías ALIMENTOS y LIMPIEZA. Se dejó afuera a propósito la categoría "Precio por Mayor".
+
+Cada uno se carga solo **una vez**, al arrancar (queda marcado en la configuración). El IVA se cargó en 22% para todos: revisá los que lleven 10%.
 
 Las imágenes de productos se guardan en la base (colección `images`) y se sirven en `/api/images/<id>`.
 

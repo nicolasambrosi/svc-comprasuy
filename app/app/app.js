@@ -228,31 +228,56 @@
     bindSalesTable(el);
   };
 
+  // ----- Listas de precios: comercios / residenciales e instituciones -----
+  // Antes de vender o de ver productos se elige la lista; cada una tiene sus propios productos y precios.
+  var LISTS = [
+    { v: 'comercio', t: 'Comercio', d: 'Productos y precios para comercios' },
+    { v: 'institucion', t: 'Residencial o institución', d: 'Productos y precios para residenciales e instituciones' }
+  ];
+  var listOf = function (p) { return p && p.list === 'institucion' ? 'institucion' : 'comercio'; };
+  var listName = function (v) { return v === 'institucion' ? 'Residenciales e instituciones' : 'Comercios'; };
+  var curList = '';
+  function listChooser(el, title, onPick) {
+    el.innerHTML = '<div class="head"><h1>' + esc(title) + '</h1></div><div class="card list-pick"><h2>¿Comercio o institución?</h2>' +
+      '<p class="muted">Elegí la lista para ver sus productos y precios.</p><div class="list-opts">' +
+      LISTS.map(function (l) {
+        var n = db.products.filter(function (p) { return listOf(p) === l.v; }).length;
+        return '<button type="button" class="list-opt" data-list="' + l.v + '"><b>' + esc(l.t) + '</b><span>' + esc(l.d) + '</span><small>' + n + (n === 1 ? ' producto' : ' productos') + '</small></button>';
+      }).join('') + '</div></div>';
+    $$('[data-list]', el).forEach(function (b) { b.addEventListener('click', function () { curList = b.dataset.list; onPick(curList); }); });
+  }
+  function listBadge(v) { return '<div class="list-badge"><span>Lista: <b>' + esc(listName(v)) + '</b></span><button type="button" class="btn sm" id="chgList">Cambiar</button></div>'; }
+
   // ----- Nueva venta (punto de venta) -----
-  var newCart = function () { return { items: [], clientId: '', payment: 'Efectivo', status: 'pagada', discount: 0, notes: '', address: '', phone: '' }; };
+  var newCart = function () { return { list: '', items: [], clientId: '', payment: 'Efectivo', status: 'pagada', discount: 0, notes: '', address: '', phone: '' }; };
   var cart = newCart();
 
   views.venta = function (el) {
+    if (!cart.list) return listChooser(el, 'Nueva venta', function (v) { cart.list = v; views.venta(el); });
     el.innerHTML =
-      '<div class="head"><h1>Nueva venta</h1></div>' +
+      '<div class="head"><h1>Nueva venta</h1>' + listBadge(cart.list) + '</div>' +
       '<div class="pos"><div>' +
       '<div class="toolbar"><input type="search" id="q" placeholder="Buscar producto por nombre, código o categoría…"><select id="cat"><option value="">Todas las categorías</option>' +
-      categories().map(function (c) { return '<option>' + esc(c) + '</option>'; }).join('') + '</select></div>' +
+      categories(cart.list).map(function (c) { return '<option>' + esc(c) + '</option>'; }).join('') + '</select></div>' +
       '<div class="prod-grid" id="prods"></div></div>' +
       '<div class="card cart" id="cart"></div></div>' +
       '<button class="btn primary cartbar" id="cartbar" hidden></button>';
     $('#cartbar', el).addEventListener('click', function () { $('#cart', el).scrollIntoView({ behavior: 'smooth' }); });
+    $('#chgList', el).addEventListener('click', function () {
+      if (cart.items.length && !confirm('Cambiar de lista vacía el carrito. ¿Seguir?')) return;
+      cart = newCart(); views.venta(el);
+    });
 
-    // Quita del carrito lo que ya no existe y actualiza precios.
+    // Quita del carrito lo que ya no existe (o es de otra lista) y actualiza precios.
     cart.items = cart.items.filter(function (it) {
-      var p = byId(db.products, it.productId); if (!p) return false;
+      var p = byId(db.products, it.productId); if (!p || listOf(p) !== cart.list) return false;
       it.price = p.price; it.iva = p.iva; it.cost = p.cost; it.name = p.name; return true;
     });
 
     function drawProducts() {
       var q = $('#q', el).value.toLowerCase(), cat = $('#cat', el).value;
       var list = db.products.filter(function (p) {
-        return (!cat || p.category === cat) && (!q || (p.name + ' ' + p.code + ' ' + p.category + ' ' + (p.description || '')).toLowerCase().indexOf(q) >= 0);
+        return listOf(p) === cart.list && (!cat || p.category === cat) && (!q || (p.name + ' ' + p.code + ' ' + p.category + ' ' + (p.description || '')).toLowerCase().indexOf(q) >= 0);
       }).sort(function (a, b) { return a.name.localeCompare(b.name); });
       $('#prods', el).innerHTML = list.length ? list.map(function (p) {
         var it = inCart(p.id);
@@ -375,14 +400,15 @@
       if (cart.status === 'pendiente' && !cart.clientId) { toast('Elegí un cliente para dejar la venta pendiente de cobro', true); return; }
       btn.disabled = true;
       var body = {
+        list: cart.list,
         items: cart.items.map(function (it) { return { productId: it.productId, qty: it.qty }; }),
         clientId: cart.clientId, payment: cart.payment, status: cart.status, discountPct: cart.discount, notes: cart.notes,
         deliveryAddress: cart.address, deliveryPhone: cart.phone
       };
       api('POST', '/sales', body).then(function (sale) {
-        cart = newCart();
+        cart = newCart(); // la próxima venta vuelve a preguntar comercio o institución
         return refresh().then(function () {
-          drawProducts(); drawCart();
+          views.venta(el);
           toast('Venta N.º ' + sale.number + ' guardada' + (withReceipt ? '' : ' · la ves en Ventas'));
           if (withReceipt) showReceipt(sale);
           else window.scrollTo(0, 0);
@@ -396,8 +422,8 @@
     $('#q', el).focus();
   };
 
-  function categories() {
-    var s = {}; db.products.forEach(function (p) { if (p.category) s[p.category] = 1; });
+  function categories(list) {
+    var s = {}; db.products.forEach(function (p) { if (p.category && (!list || listOf(p) === list)) s[p.category] = 1; });
     return Object.keys(s).sort();
   }
 
@@ -616,7 +642,7 @@
       '<span class="pill ' + s.status + '">' + s.status + '</span></div></div>' +
       '<p><b>Cliente:</b> ' + esc(s.clientName) + (dl.doc ? ' · RUT/CI ' + esc(dl.doc) : '') +
       '<br><b>Dirección de entrega:</b> ' + (esc(dl.address) || '<span class="muted">—</span>') +
-      '<br><b>Teléfono:</b> ' + (esc(dl.phone) || '<span class="muted">—</span>') + '<br><b>Pago:</b> ' + esc(s.payment) + (s.userName ? '<br><b>Vendedor:</b> ' + esc(s.userName) : '') + (s.notes ? '<br><b>Nota:</b> ' + esc(s.notes) : '') + '</p>' +
+      '<br><b>Teléfono:</b> ' + (esc(dl.phone) || '<span class="muted">—</span>') + '<br><b>Pago:</b> ' + esc(s.payment) + '<br><b>Lista:</b> ' + esc(listName(listOf(s))) + (s.userName ? '<br><b>Vendedor:</b> ' + esc(s.userName) : '') + (s.notes ? '<br><b>Nota:</b> ' + esc(s.notes) : '') + '</p>' +
       '<table><thead><tr><th>Producto</th><th class="num">Cant.</th><th class="num">Precio</th><th class="num">IVA</th><th class="num">Importe</th></tr></thead><tbody>' +
       s.items.map(function (it) {
         return '<tr><td>' + esc(it.name) + '</td><td class="num">' + it.qty + '</td><td class="num">' + money(it.price) + '</td><td class="num">' + it.iva + '%</td><td class="num">' + money(it.qty * it.price) + '</td></tr>';
@@ -644,12 +670,13 @@
     el.innerHTML = '<div class="head"><h1>Ventas</h1><div class="actions"><button class="btn" id="exp">Exportar CSV</button><a class="btn primary" href="#/venta">+ Nueva venta</a></div></div>' +
       '<div class="toolbar"><input type="search" id="q" placeholder="Buscar por cliente, vendedor o N.º…">' +
       '<select id="st"><option value="">Todos los estados</option>' + STATUSES.map(function (s) { return '<option>' + s + '</option>'; }).join('') + '</select>' +
+      '<select id="ls"><option value="">Comercios e instituciones</option><option value="comercio">Solo comercios</option><option value="institucion">Solo instituciones</option></select>' +
       '<input type="date" id="from" title="Desde"><input type="date" id="to" title="Hasta"></div><div id="list"></div><p class="muted small" id="sum"></p>';
     function filtered() {
-      var q = $('#q', el).value.toLowerCase(), st = $('#st', el).value, from = $('#from', el).value, to = $('#to', el).value;
+      var q = $('#q', el).value.toLowerCase(), st = $('#st', el).value, ls = $('#ls', el).value, from = $('#from', el).value, to = $('#to', el).value;
       return db.sales.filter(function (s) {
         var k = dayKey(s.date);
-        return (!st || s.status === st) && (!from || k >= from) && (!to || k <= to) &&
+        return (!st || s.status === st) && (!ls || listOf(s) === ls) && (!from || k >= from) && (!to || k <= to) &&
           (!q || (s.clientName + ' ' + s.number + ' ' + (s.userName || '')).toLowerCase().indexOf(q) >= 0);
       }).sort(function (a, b) { return b.date.localeCompare(a.date); });
     }
@@ -660,11 +687,11 @@
       $('#sum', el).textContent = list.length + ' ventas · Total (sin anuladas): ' + money(tot);
       bindSalesTable(el, draw);
     }
-    ['q', 'st', 'from', 'to'].forEach(function (id) { $('#' + id, el).addEventListener('input', draw); });
+    ['q', 'st', 'ls', 'from', 'to'].forEach(function (id) { $('#' + id, el).addEventListener('input', draw); });
     $('#exp', el).addEventListener('click', function () {
-      var rows = [['Numero', 'Fecha', 'Cliente', 'Vendedor', 'Pago', 'Estado', 'Subtotal', 'IVA', 'Descuento', 'Total', 'Productos']];
+      var rows = [['Numero', 'Fecha', 'Lista', 'Cliente', 'Vendedor', 'Pago', 'Estado', 'Subtotal', 'IVA', 'Descuento', 'Total', 'Productos']];
       filtered().forEach(function (s) {
-        rows.push([s.number, fmtDateTime(s.date), s.clientName, s.userName, s.payment, s.status, s.subtotal, s.iva, s.discount, s.total,
+        rows.push([s.number, fmtDateTime(s.date), listName(listOf(s)), s.clientName, s.userName, s.payment, s.status, s.subtotal, s.iva, s.discount, s.total,
           s.items.map(function (i) { return i.qty + 'x ' + i.name; }).join(', ')]);
       });
       csv('ventas.csv', rows);
@@ -676,6 +703,7 @@
   var productFields = function () {
     return [
       { name: 'name', label: 'Nombre', req: true, full: true },
+      { name: 'list', label: 'Lista de precios', type: 'select', full: true, def: curList || 'comercio', options: [{ v: 'comercio', t: 'Comercios' }, { v: 'institucion', t: 'Residenciales e instituciones' }] },
       { name: 'description', label: 'Presentación / descripción', ph: 'Ej.: caja x 20 botellas', full: true },
       { name: 'code', label: 'Código / SKU' },
       { name: 'category', label: 'Categoría', ph: 'Ej.: Bebidas' },
@@ -726,15 +754,16 @@
   }
   views.productos = function (el) {
     var adm = isAdmin();
-    el.innerHTML = '<div class="head"><h1>Productos</h1><div class="actions"><button class="btn" id="exp">Exportar CSV</button>' +
+    if (!curList) return listChooser(el, 'Productos', function () { views.productos(el); });
+    el.innerHTML = '<div class="head"><h1>Productos</h1>' + listBadge(curList) + '<div class="actions"><button class="btn" id="exp">Exportar CSV</button>' +
       (adm ? '<button class="btn primary" id="add">+ Nuevo producto</button>' : '') + '</div></div>' +
       '<div class="toolbar"><input type="search" id="q" placeholder="Buscar producto…"><select id="cat"><option value="">Todas las categorías</option>' +
-      categories().map(function (c) { return '<option>' + esc(c) + '</option>'; }).join('') + '</select>' +
+      categories(curList).map(function (c) { return '<option>' + esc(c) + '</option>'; }).join('') + '</select>' +
       '<select id="lw"><option value="">Todo el stock</option><option value="low">Solo stock bajo</option></select></div><div id="list"></div>';
     function draw() {
       var q = $('#q', el).value.toLowerCase(), cat = $('#cat', el).value, lw = $('#lw', el).value;
       var list = db.products.filter(function (p) {
-        return (!cat || p.category === cat) && (!lw || p.stock <= p.minStock) &&
+        return listOf(p) === curList && (!cat || p.category === cat) && (!lw || p.stock <= p.minStock) &&
           (!q || (p.name + ' ' + p.code + ' ' + p.category).toLowerCase().indexOf(q) >= 0);
       }).sort(function (a, b) { return a.name.localeCompare(b.name); });
       $('#list', el).innerHTML = list.length ? '<div class="tbl-wrap"><table><thead><tr><th></th><th>Producto</th><th>Categoría</th>' + (adm ? '<th class="num">Costo</th>' : '') + '<th class="num">Precio</th>' + (adm ? '<th class="num">Margen</th>' : '') + '<th class="num">IVA</th><th class="num">Stock</th>' + (adm ? '<th></th>' : '') + '</tr></thead><tbody>' +
@@ -748,6 +777,7 @@
         }).join('') + '</tbody></table></div>' : '<div class="card empty">No hay productos' + (db.products.length ? ' con ese filtro' : ' todavía') + '.</div>';
     }
     ['q', 'cat', 'lw'].forEach(function (id) { $('#' + id, el).addEventListener('input', draw); });
+    $('#chgList', el).addEventListener('click', function () { curList = ''; views.productos(el); });
     if (adm) $('#add', el).addEventListener('click', function () { productModal(null); });
     $('#list', el).addEventListener('click', function (e) {
       var b = e.target.closest('button'); if (!b) return;
@@ -764,8 +794,8 @@
       }
     });
     $('#exp', el).addEventListener('click', function () {
-      csv('productos.csv', [['Codigo', 'Nombre', 'Categoria'].concat(adm ? ['Costo'] : []).concat(['Precio', 'IVA', 'Stock', 'StockMinimo'])].concat(
-        db.products.map(function (p) { return [p.code, p.name, p.category].concat(adm ? [p.cost] : []).concat([p.price, p.iva, p.stock, p.minStock]); })));
+      csv('productos-' + curList + '.csv', [['Lista', 'Codigo', 'Nombre', 'Categoria'].concat(adm ? ['Costo'] : []).concat(['Precio', 'IVA', 'Stock', 'StockMinimo'])].concat(
+        db.products.filter(function (p) { return listOf(p) === curList; }).map(function (p) { return [listName(listOf(p)), p.code, p.name, p.category].concat(adm ? [p.cost] : []).concat([p.price, p.iva, p.stock, p.minStock]); })));
     });
     draw();
   };
