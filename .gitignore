@@ -11,3 +11,6 @@ questions.json
 transcript.json
 usage.json
 .claude/
+
+data/
+.env

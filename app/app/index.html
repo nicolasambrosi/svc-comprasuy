@@ -13,7 +13,19 @@
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
-<div class="layout">
+<div id="login" class="login" hidden>
+  <form class="login-card" id="loginForm">
+    <img src="../assets/logo.svg" alt="" width="52" height="52">
+    <h1>SVC</h1>
+    <p class="muted">Sistema de Ventas Comprasuy</p>
+    <label class="f">Email<input name="email" type="email" autocomplete="username" required></label>
+    <label class="f">Contraseña<input name="password" type="password" autocomplete="current-password" required></label>
+    <p class="login-err" id="loginErr" hidden></p>
+    <button class="btn primary big">Entrar</button>
+    <a class="small muted" href="../">← Volver al sitio</a>
+  </form>
+</div>
+<div class="layout" id="shell" hidden>
   <aside class="side">
     <a class="brand" href="#/panel"><img src="../assets/logo.svg" alt=""><span>SVC<small>Sistema de Ventas Comprasuy</small></span></a>
     <a class="nav" href="#/panel">📊 Panel</a>
@@ -24,11 +36,13 @@
     <a class="nav" href="#/reportes">📈 Reportes</a>
     <a class="nav" href="#/config">⚙️ Configuración</a>
     <div class="grow"></div>
+    <div class="who" id="who"></div>
     <a class="back" href="../">← Volver al sitio</a>
   </aside>
   <main class="main" id="view"></main>
 </div>
 <div id="modal-root"></div>
+<script src="calc.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

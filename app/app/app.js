@@ -1,10 +1,10 @@
 /* SVC · Sistema de Ventas Comprasuy
-   App de una sola página, sin dependencias. Los datos se guardan en localStorage. */
+   App de una sola página. Los datos viven en el servidor (MySQL) y se leen/escriben por /api. */
 (function () {
   'use strict';
 
   // ---------- utilidades ----------
-  var KEY = 'svc-data-v1';
+  var OLD_KEY = 'svc-data-v1'; // datos de la versión anterior (solo navegador)
   var $ = function (s, r) { return (r || document).querySelector(s); };
   var $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
   var esc = function (s) {
@@ -12,8 +12,7 @@
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   };
-  var num = function (v) { var n = parseFloat(String(v).replace(',', '.')); return isFinite(n) ? n : 0; };
-  var round2 = function (n) { return Math.round(n * 100) / 100; };
+  var num = SVCCalc.num, round2 = SVCCalc.round2, calcSale = SVCCalc.calcSale;
   var money = function (n) {
     return '$U ' + (n || 0).toLocaleString('es-UY', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
@@ -26,44 +25,34 @@
   var STATUSES = ['pagada', 'pendiente', 'entregada', 'anulada'];
   var PAYMENTS = ['Efectivo', 'Débito', 'Crédito', 'Transferencia', 'Cuenta corriente'];
   var IVA_RATES = [{ v: 22, t: '22% (básica)' }, { v: 10, t: '10% (mínima)' }, { v: 0, t: 'Exento' }];
+  var ROLE_NAMES = { admin: 'Administrador', vendedor: 'Vendedor' };
 
-  // ---------- datos ----------
-  function emptyDB() {
-    return {
-      products: [], clients: [], sales: [],
-      settings: { company: 'Comprasuy', rut: '', address: '', phone: '', email: '', nextNumber: 1, lowStockDefault: 5 }
-    };
+  // ---------- servidor ----------
+  function api(method, url, body) {
+    return fetch('/api' + url, {
+      method: method, credentials: 'same-origin',
+      headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},
+      body: body !== undefined ? JSON.stringify(body) : undefined
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (data) {
+        if (r.status === 401 && url !== '/login') { showLogin(); throw new Error('Tu sesión terminó. Volvé a entrar.'); }
+        if (!r.ok) throw new Error(data.error || 'Error ' + r.status);
+        return data;
+      });
+    }, function () { throw new Error('Sin conexión con el servidor. Revisá internet y probá de nuevo.'); });
   }
-  var db;
-  function load() {
-    try {
-      var raw = localStorage.getItem(KEY);
-      db = raw ? JSON.parse(raw) : emptyDB();
-    } catch (e) { db = emptyDB(); }
-    var base = emptyDB();
-    ['products', 'clients', 'sales'].forEach(function (k) { if (!Array.isArray(db[k])) db[k] = []; });
-    db.settings = Object.assign(base.settings, db.settings || {});
+  var db = { products: [], clients: [], sales: [], users: [], settings: {}, me: null };
+  function refresh() {
+    return api('GET', '/data').then(function (d) { db = d; return d; });
   }
-  function save() {
-    try { localStorage.setItem(KEY, JSON.stringify(db)); }
-    catch (e) { toast('No se pudo guardar en el navegador. Descargá un respaldo.', true); }
+  var isAdmin = function () { return db.me && db.me.role === 'admin'; };
+  // Ejecuta una escritura, recarga los datos y vuelve a dibujar.
+  function act(promise, okMsg, after) {
+    return promise.then(function (res) {
+      return refresh().then(function () { if (okMsg) toast(okMsg); (after || render)(res); return res; });
+    }).catch(function (e) { toast(e.message, true); throw e; });
   }
   var byId = function (list, id) { for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i]; return null; };
-
-  // Calcula totales de una venta. Los precios incluyen IVA.
-  function calcSale(items, discountPct) {
-    var d = Math.min(Math.max(num(discountPct), 0), 100) / 100;
-    var gross = 0, iva = 0, cost = 0;
-    items.forEach(function (it) {
-      var line = it.qty * it.price * (1 - d);
-      gross += it.qty * it.price;
-      iva += line * it.iva / (100 + it.iva);
-      cost += it.qty * (it.cost || 0);
-    });
-    var total = round2(gross * (1 - d));
-    iva = round2(iva);
-    return { gross: round2(gross), discount: round2(gross - total), subtotal: round2(total - iva), iva: iva, total: total, cost: round2(cost) };
-  }
 
   // ---------- UI helpers ----------
   var toastTimer;
@@ -74,7 +63,7 @@
     t.textContent = msg;
     document.body.appendChild(t);
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () { t.remove(); }, 2800);
+    toastTimer = setTimeout(function () { t.remove(); }, 3200);
   }
   function openModal(title, html, onMount, wide) {
     var root = $('#modal-root');
@@ -100,20 +89,24 @@
     if (f.type === 'textarea') return '<label class="' + cls + '">' + esc(f.label) + '<textarea name="' + f.name + '" rows="2">' + esc(v) + '</textarea></label>';
     return '<label class="' + cls + '">' + esc(f.label) + '<input name="' + f.name + '" type="' + (f.type || 'text') + '"' +
       (f.type === 'number' ? ' step="' + (f.step || 'any') + '" min="' + (f.min == null ? 0 : f.min) + '"' : '') +
+      (f.auto ? ' autocomplete="' + f.auto + '"' : '') +
       ' value="' + esc(v) + '"' + req + (f.ph ? ' placeholder="' + esc(f.ph) + '"' : '') + '></label>';
   }
+  // onSave devuelve una promesa; el modal se cierra solo si sale bien.
   function formModal(title, fields, obj, onSave) {
     var html = '<form class="form">' + fields.map(function (f) { return field(f, obj[f.name]); }).join('') +
       '<div class="foot full"><button type="button" class="btn" data-close>Cancelar</button><button class="btn primary">Guardar</button></div></form>';
     openModal(title, html, function (m) {
-      $('form', m).addEventListener('submit', function (e) {
+      var form = $('form', m);
+      form.addEventListener('submit', function (e) {
         e.preventDefault();
         var out = {};
         fields.forEach(function (f) {
-          var raw = this.elements[f.name].value;
-          out[f.name] = f.type === 'number' || f.numeric ? num(raw) : raw.trim();
-        }, this);
-        if (onSave(out) !== false) closeModal();
+          var raw = form.elements[f.name].value;
+          out[f.name] = f.type === 'number' || f.numeric ? num(raw) : f.type === 'password' ? raw : raw.trim();
+        });
+        var btn = $('button.primary', form); btn.disabled = true;
+        Promise.resolve(onSave(out)).then(function () { closeModal(); }, function () { btn.disabled = false; });
       });
     });
   }
@@ -135,10 +128,10 @@
     setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
   }
 
-  function barChart(data) { // data: [{label, value}]
+  function barChart(data) {
     var W = 700, H = 220, padL = 8, padB = 26, top = 14;
     var max = Math.max.apply(null, data.map(function (d) { return d.value; }).concat([1]));
-    var bw = (W - padL * 2) / data.length;
+    var bw = (W - padL * 2) / Math.max(data.length, 1);
     var bars = data.map(function (d, i) {
       var h = (H - padB - top) * d.value / max;
       var x = padL + i * bw + bw * 0.15, y = H - padB - h;
@@ -156,6 +149,10 @@
     return out;
   }
   var activeSales = function () { return db.sales.filter(function (s) { return s.status !== 'anulada'; }); };
+  function oldLocalData() {
+    try { var d = JSON.parse(localStorage.getItem(OLD_KEY)); return d && Array.isArray(d.products) && (d.products.length || d.sales.length) ? d : null; }
+    catch (e) { return null; }
+  }
 
   // ---------- vistas ----------
   var views = {};
@@ -163,22 +160,25 @@
   views.panel = function (el) {
     var today = dayKey(new Date());
     var now = new Date(), mKey = now.getFullYear() + '-' + pad(now.getMonth() + 1);
-    var act = activeSales();
-    var tSales = act.filter(function (s) { return dayKey(s.date) === today; });
-    var mSales = act.filter(function (s) { return dayKey(s.date).slice(0, 7) === mKey; });
+    var act0 = activeSales();
+    var tSales = act0.filter(function (s) { return dayKey(s.date) === today; });
+    var mSales = act0.filter(function (s) { return dayKey(s.date).slice(0, 7) === mKey; });
     var sum = function (arr) { return arr.reduce(function (a, s) { return a + s.total; }, 0); };
     var debt = sum(db.sales.filter(function (s) { return s.status === 'pendiente'; }));
     var low = db.products.filter(function (p) { return p.stock <= p.minStock; });
     var days = lastDays(14).map(function (d) {
       var k = dayKey(d);
-      return { label: pad(d.getDate()) + '/' + pad(d.getMonth() + 1), value: sum(act.filter(function (s) { return dayKey(s.date) === k; })) };
+      return { label: pad(d.getDate()) + '/' + pad(d.getMonth() + 1), value: sum(act0.filter(function (s) { return dayKey(s.date) === k; })) };
     });
     var recent = db.sales.slice().sort(function (a, b) { return b.date.localeCompare(a.date); }).slice(0, 6);
+    var old = isAdmin() && db.products.length === 0 && db.sales.length === 0 ? oldLocalData() : null;
 
     el.innerHTML =
       '<div class="head"><h1>Panel</h1><div class="actions">' +
-      (db.products.length === 0 ? '<button class="btn" id="demo">Cargar datos de ejemplo</button>' : '') +
+      (isAdmin() && db.products.length === 0 ? '<button class="btn" id="demo">Cargar datos de ejemplo</button>' : '') +
       '<a class="btn primary" href="#/venta">+ Nueva venta</a></div></div>' +
+      (old ? '<div class="card" style="margin-bottom:16px;border-color:var(--orange)"><b>Este navegador tiene datos de la versión anterior</b> (' + old.products.length + ' productos, ' + (old.clients || []).length + ' clientes, ' + old.sales.length + ' ventas). <button class="btn sm primary" id="migrate">Pasarlos a la base de datos</button></div>' : '') +
+      (isAdmin() ? '' : '<p class="muted small">Mostrando tus ventas.</p>') +
       '<div class="grid kpis">' +
       '<div class="card kpi accent"><span>Ventas de hoy</span><b>' + money(sum(tSales)) + '</b><span>' + tSales.length + ' ventas</span></div>' +
       '<div class="card kpi"><span>Ventas del mes</span><b>' + money(sum(mSales)) + '</b><span class="muted small">' + mSales.length + ' ventas</span></div>' +
@@ -192,7 +192,15 @@
       '<div class="card" style="margin-top:16px"><h2>Últimas ventas</h2>' + salesTable(recent, true) + '</div>';
 
     var demo = $('#demo', el);
-    if (demo) demo.addEventListener('click', function () { seedDemo(); toast('Datos de ejemplo cargados'); render(); });
+    if (demo) demo.addEventListener('click', function () { demo.disabled = true; act(api('POST', '/import', demoData()), 'Datos de ejemplo cargados').catch(function () { demo.disabled = false; }); });
+    var mig = $('#migrate', el);
+    if (mig) mig.addEventListener('click', function () {
+      mig.disabled = true;
+      act(api('POST', '/import', Object.assign({ mode: 'replace' }, old)), 'Datos pasados a la base de datos', function () {
+        try { localStorage.setItem(OLD_KEY + '-migrado', localStorage.getItem(OLD_KEY)); localStorage.removeItem(OLD_KEY); } catch (e) { /* nada */ }
+        render();
+      }).catch(function () { mig.disabled = false; });
+    });
     bindSalesTable(el);
   };
 
@@ -210,14 +218,20 @@
       '<button class="btn primary cartbar" id="cartbar" hidden></button>';
     $('#cartbar', el).addEventListener('click', function () { $('#cart', el).scrollIntoView({ behavior: 'smooth' }); });
 
+    // Quita del carrito lo que ya no existe y actualiza precios.
+    cart.items = cart.items.filter(function (it) {
+      var p = byId(db.products, it.productId); if (!p) return false;
+      it.price = p.price; it.iva = p.iva; it.cost = p.cost; it.name = p.name; return true;
+    });
+
     function drawProducts() {
       var q = $('#q', el).value.toLowerCase(), cat = $('#cat', el).value;
       var list = db.products.filter(function (p) {
         return (!cat || p.category === cat) && (!q || (p.name + ' ' + p.code + ' ' + p.category).toLowerCase().indexOf(q) >= 0);
-      });
+      }).sort(function (a, b) { return a.name.localeCompare(b.name); });
       $('#prods', el).innerHTML = list.length ? list.map(function (p) {
         return '<button class="prod' + (p.stock <= 0 ? ' out' : '') + '" data-id="' + p.id + '"><span class="muted small">' + esc(p.code || p.category) + '</span><b>' + esc(p.name) + '</b><span class="p">' + money(p.price) + '</span><span class="small ' + (p.stock <= p.minStock ? 'pill low' : 'muted') + '">Stock: ' + p.stock + '</span></button>';
-      }).join('') : '<div class="card empty" style="grid-column:1/-1">No hay productos. <a href="#/productos">Cargá tus productos</a>.</div>';
+      }).join('') : '<div class="card empty" style="grid-column:1/-1">No hay productos.' + (isAdmin() ? ' <a href="#/productos">Cargá tus productos</a>.' : ' Pedile a un administrador que los cargue.') + '</div>';
     }
     function inCart(id) { for (var i = 0; i < cart.items.length; i++) if (cart.items[i].productId === id) return cart.items[i]; return null; }
     function drawCart() {
@@ -279,32 +293,28 @@
     $('#cart', el).addEventListener('click', function (e) {
       if (e.target.dataset.rm != null) { cart.items.splice(+e.target.dataset.rm, 1); drawCart(); }
       if (e.target.id === 'clear') { cart.items = []; drawCart(); }
-      if (e.target.id === 'checkout') checkout();
+      if (e.target.id === 'checkout') checkout(e.target);
     });
 
-    function checkout() {
+    function checkout(btn) {
       cart.notes = $('#cNotes', el).value;
-      for (var i = 0; i < cart.items.length; i++) {
-        var p = byId(db.products, cart.items[i].productId);
-        if (p && cart.items[i].qty > p.stock) { toast('Stock insuficiente de ' + p.name, true); return; }
-      }
       if (cart.status === 'pendiente' && !cart.clientId) { toast('Elegí un cliente para dejar la venta pendiente de cobro', true); return; }
-      var client = byId(db.clients, cart.clientId);
-      var t = calcSale(cart.items, cart.discount);
-      var sale = {
-        id: uid(), number: db.settings.nextNumber++, date: new Date().toISOString(),
-        clientId: cart.clientId, clientName: client ? client.name : 'Consumidor final',
-        items: cart.items.map(function (x) { return Object.assign({}, x); }),
-        discountPct: cart.discount, payment: cart.payment, status: cart.status, notes: cart.notes
+      btn.disabled = true;
+      var body = {
+        items: cart.items.map(function (it) { return { productId: it.productId, qty: it.qty }; }),
+        clientId: cart.clientId, payment: cart.payment, status: cart.status, discountPct: cart.discount, notes: cart.notes
       };
-      Object.assign(sale, t);
-      sale.items.forEach(function (it) { var p = byId(db.products, it.productId); if (p) p.stock -= it.qty; });
-      db.sales.push(sale);
-      save();
-      cart = { items: [], clientId: '', payment: 'Efectivo', status: 'pagada', discount: 0, notes: '' };
-      drawProducts(); drawCart();
-      toast('Venta N.º ' + sale.number + ' registrada');
-      showReceipt(sale);
+      api('POST', '/sales', body).then(function (sale) {
+        cart = { items: [], clientId: '', payment: 'Efectivo', status: 'pagada', discount: 0, notes: '' };
+        return refresh().then(function () {
+          drawProducts(); drawCart();
+          toast('Venta N.º ' + sale.number + ' registrada');
+          showReceipt(sale);
+        });
+      }).catch(function (e) {
+        toast(e.message, true);
+        refresh().then(function () { drawProducts(); drawCart(); });
+      });
     }
     drawProducts(); drawCart();
     $('#q', el).focus();
@@ -318,13 +328,16 @@
   // ----- Ventas -----
   function salesTable(list, compact) {
     if (!list.length) return '<div class="empty">Todavía no hay ventas.</div>';
+    var opts = STATUSES.filter(function (x) { return x !== 'anulada' || isAdmin(); });
     return '<div class="tbl-wrap"><table><thead><tr><th>N.º</th><th>Fecha</th><th>Cliente</th>' + (compact ? '' : '<th>Pago</th>') +
+      (compact || !isAdmin() ? '' : '<th>Vendedor</th>') +
       '<th>Estado</th><th class="num">Total</th><th></th></tr></thead><tbody>' +
       list.map(function (s) {
         return '<tr><td>' + s.number + '</td><td>' + fmtDateTime(s.date) + '</td><td>' + esc(s.clientName) + '</td>' +
           (compact ? '' : '<td>' + esc(s.payment) + '</td>') +
+          (compact || !isAdmin() ? '' : '<td>' + esc(s.userName || '—') + '</td>') +
           '<td>' + (compact || s.status === 'anulada' ? '<span class="pill ' + s.status + '">' + s.status + '</span>' :
-            '<select data-status="' + s.id + '">' + STATUSES.map(function (x) { return '<option' + (x === s.status ? ' selected' : '') + '>' + x + '</option>'; }).join('') + '</select>') + '</td>' +
+            '<select data-status="' + s.id + '">' + opts.map(function (x) { return '<option' + (x === s.status ? ' selected' : '') + '>' + x + '</option>'; }).join('') + '</select>') + '</td>' +
           '<td class="num"><b>' + money(s.total) + '</b></td><td class="act"><button class="btn sm" data-view="' + s.id + '">Ver</button></td></tr>';
       }).join('') + '</tbody></table></div>';
   }
@@ -333,12 +346,10 @@
     $$('[data-status]', el).forEach(function (sel) {
       sel.addEventListener('change', function () {
         var s = byId(db.sales, sel.dataset.status);
-        if (sel.value === 'anulada') {
-          if (!confirm('¿Anular la venta N.º ' + s.number + '? El stock vuelve al inventario y no se puede deshacer.')) { sel.value = s.status; return; }
-          s.items.forEach(function (it) { var p = byId(db.products, it.productId); if (p) p.stock += it.qty; });
-        }
-        s.status = sel.value; save(); toast('Venta N.º ' + s.number + ': ' + s.status);
-        if (after) after(); else render();
+        if (sel.value === 'anulada' && !confirm('¿Anular la venta N.º ' + s.number + '? El stock vuelve al inventario y no se puede deshacer.')) { sel.value = s.status; return; }
+        sel.disabled = true;
+        act(api('PATCH', '/sales/' + s.id, { status: sel.value }), 'Venta N.º ' + s.number + ': ' + sel.value, after)
+          .catch(function () { sel.value = s.status; sel.disabled = false; });
       });
     });
   }
@@ -348,7 +359,7 @@
       (st.rut ? 'RUT ' + esc(st.rut) + '<br>' : '') + esc(st.address) + (st.phone ? '<br>Tel. ' + esc(st.phone) : '') + '</div></div>' +
       '<div style="text-align:right"><b>Comprobante N.º ' + s.number + '</b><div class="small">' + fmtDateTime(s.date) + '</div>' +
       '<span class="pill ' + s.status + '">' + s.status + '</span></div></div>' +
-      '<p><b>Cliente:</b> ' + esc(s.clientName) + '<br><b>Pago:</b> ' + esc(s.payment) + (s.notes ? '<br><b>Nota:</b> ' + esc(s.notes) : '') + '</p>' +
+      '<p><b>Cliente:</b> ' + esc(s.clientName) + '<br><b>Pago:</b> ' + esc(s.payment) + (s.userName ? '<br><b>Vendedor:</b> ' + esc(s.userName) : '') + (s.notes ? '<br><b>Nota:</b> ' + esc(s.notes) : '') + '</p>' +
       '<table><thead><tr><th>Producto</th><th class="num">Cant.</th><th class="num">Precio</th><th class="num">IVA</th><th class="num">Importe</th></tr></thead><tbody>' +
       s.items.map(function (it) {
         return '<tr><td>' + esc(it.name) + '</td><td class="num">' + it.qty + '</td><td class="num">' + money(it.price) + '</td><td class="num">' + it.iva + '%</td><td class="num">' + money(it.qty * it.price) + '</td></tr>';
@@ -365,7 +376,7 @@
 
   views.ventas = function (el) {
     el.innerHTML = '<div class="head"><h1>Ventas</h1><div class="actions"><button class="btn" id="exp">Exportar CSV</button><a class="btn primary" href="#/venta">+ Nueva venta</a></div></div>' +
-      '<div class="toolbar"><input type="search" id="q" placeholder="Buscar por cliente o N.º…">' +
+      '<div class="toolbar"><input type="search" id="q" placeholder="Buscar por cliente, vendedor o N.º…">' +
       '<select id="st"><option value="">Todos los estados</option>' + STATUSES.map(function (s) { return '<option>' + s + '</option>'; }).join('') + '</select>' +
       '<input type="date" id="from" title="Desde"><input type="date" id="to" title="Hasta"></div><div id="list"></div><p class="muted small" id="sum"></p>';
     function filtered() {
@@ -373,7 +384,7 @@
       return db.sales.filter(function (s) {
         var k = dayKey(s.date);
         return (!st || s.status === st) && (!from || k >= from) && (!to || k <= to) &&
-          (!q || (s.clientName + ' ' + s.number).toLowerCase().indexOf(q) >= 0);
+          (!q || (s.clientName + ' ' + s.number + ' ' + (s.userName || '')).toLowerCase().indexOf(q) >= 0);
       }).sort(function (a, b) { return b.date.localeCompare(a.date); });
     }
     function draw() {
@@ -385,9 +396,9 @@
     }
     ['q', 'st', 'from', 'to'].forEach(function (id) { $('#' + id, el).addEventListener('input', draw); });
     $('#exp', el).addEventListener('click', function () {
-      var rows = [['Numero', 'Fecha', 'Cliente', 'Pago', 'Estado', 'Subtotal', 'IVA', 'Descuento', 'Total', 'Productos']];
+      var rows = [['Numero', 'Fecha', 'Cliente', 'Vendedor', 'Pago', 'Estado', 'Subtotal', 'IVA', 'Descuento', 'Total', 'Productos']];
       filtered().forEach(function (s) {
-        rows.push([s.number, fmtDateTime(s.date), s.clientName, s.payment, s.status, s.subtotal, s.iva, s.discount, s.total,
+        rows.push([s.number, fmtDateTime(s.date), s.clientName, s.userName, s.payment, s.status, s.subtotal, s.iva, s.discount, s.total,
           s.items.map(function (i) { return i.qty + 'x ' + i.name; }).join(', ')]);
       });
       csv('ventas.csv', rows);
@@ -409,7 +420,9 @@
     ];
   };
   views.productos = function (el) {
-    el.innerHTML = '<div class="head"><h1>Productos</h1><div class="actions"><button class="btn" id="exp">Exportar CSV</button><button class="btn primary" id="add">+ Nuevo producto</button></div></div>' +
+    var adm = isAdmin();
+    el.innerHTML = '<div class="head"><h1>Productos</h1><div class="actions"><button class="btn" id="exp">Exportar CSV</button>' +
+      (adm ? '<button class="btn primary" id="add">+ Nuevo producto</button>' : '') + '</div></div>' +
       '<div class="toolbar"><input type="search" id="q" placeholder="Buscar producto…"><select id="cat"><option value="">Todas las categorías</option>' +
       categories().map(function (c) { return '<option>' + esc(c) + '</option>'; }).join('') + '</select>' +
       '<select id="lw"><option value="">Todo el stock</option><option value="low">Solo stock bajo</option></select></div><div id="list"></div>';
@@ -419,47 +432,39 @@
         return (!cat || p.category === cat) && (!lw || p.stock <= p.minStock) &&
           (!q || (p.name + ' ' + p.code + ' ' + p.category).toLowerCase().indexOf(q) >= 0);
       }).sort(function (a, b) { return a.name.localeCompare(b.name); });
-      $('#list', el).innerHTML = list.length ? '<div class="tbl-wrap"><table><thead><tr><th>Código</th><th>Producto</th><th>Categoría</th><th class="num">Costo</th><th class="num">Precio</th><th class="num">Margen</th><th class="num">IVA</th><th class="num">Stock</th><th></th></tr></thead><tbody>' +
+      $('#list', el).innerHTML = list.length ? '<div class="tbl-wrap"><table><thead><tr><th>Código</th><th>Producto</th><th>Categoría</th>' + (adm ? '<th class="num">Costo</th>' : '') + '<th class="num">Precio</th>' + (adm ? '<th class="num">Margen</th>' : '') + '<th class="num">IVA</th><th class="num">Stock</th>' + (adm ? '<th></th>' : '') + '</tr></thead><tbody>' +
         list.map(function (p) {
           var net = p.price / (1 + p.iva / 100), margin = net ? (net - p.cost) / net * 100 : 0;
-          return '<tr><td class="muted">' + esc(p.code) + '</td><td><b>' + esc(p.name) + '</b></td><td>' + esc(p.category) + '</td><td class="num">' + money(p.cost) + '</td><td class="num">' + money(p.price) + '</td>' +
-            '<td class="num">' + (p.cost ? margin.toFixed(0) + '%' : '—') + '</td><td class="num">' + p.iva + '%</td>' +
+          return '<tr><td class="muted">' + esc(p.code) + '</td><td><b>' + esc(p.name) + '</b></td><td>' + esc(p.category) + '</td>' + (adm ? '<td class="num">' + money(p.cost) + '</td>' : '') + '<td class="num">' + money(p.price) + '</td>' +
+            (adm ? '<td class="num">' + (p.cost ? margin.toFixed(0) + '%' : '—') + '</td>' : '') + '<td class="num">' + p.iva + '%</td>' +
             '<td class="num"><span class="' + (p.stock <= p.minStock ? 'pill low' : '') + '">' + p.stock + '</span></td>' +
-            '<td class="act"><button class="btn sm" data-stock="' + p.id + '">± Stock</button><button class="btn sm" data-edit="' + p.id + '">Editar</button><button class="btn sm danger" data-del="' + p.id + '">Borrar</button></td></tr>';
+            (adm ? '<td class="act"><button class="btn sm" data-stock="' + p.id + '">± Stock</button><button class="btn sm" data-edit="' + p.id + '">Editar</button><button class="btn sm danger" data-del="' + p.id + '">Borrar</button></td>' : '') + '</tr>';
         }).join('') + '</tbody></table></div>' : '<div class="card empty">No hay productos' + (db.products.length ? ' con ese filtro' : ' todavía') + '.</div>';
     }
     ['q', 'cat', 'lw'].forEach(function (id) { $('#' + id, el).addEventListener('input', draw); });
-    $('#add', el).addEventListener('click', function () {
-      formModal('Nuevo producto', productFields(), {}, function (o) {
-        if (o.code && db.products.some(function (p) { return p.code && p.code.toLowerCase() === o.code.toLowerCase(); })) { toast('Ya existe un producto con ese código', true); return false; }
-        o.id = uid(); db.products.push(o); save(); toast('Producto creado'); render();
-      });
+    if (adm) $('#add', el).addEventListener('click', function () {
+      formModal('Nuevo producto', productFields(), {}, function (o) { return act(api('POST', '/products', o), 'Producto creado'); });
     });
     $('#list', el).addEventListener('click', function (e) {
       var b = e.target.closest('button'); if (!b) return;
       if (b.dataset.edit) {
         var p = byId(db.products, b.dataset.edit);
-        formModal('Editar producto', productFields(), p, function (o) {
-          if (o.code && db.products.some(function (x) { return x.id !== p.id && x.code && x.code.toLowerCase() === o.code.toLowerCase(); })) { toast('Ya existe un producto con ese código', true); return false; }
-          Object.assign(p, o); save(); toast('Producto actualizado'); render();
-        });
+        formModal('Editar producto', productFields(), p, function (o) { return act(api('PUT', '/products/' + p.id, o), 'Producto actualizado'); });
       }
       if (b.dataset.stock) {
         var ps = byId(db.products, b.dataset.stock);
         formModal('Ajustar stock: ' + ps.name, [
           { name: 'delta', label: 'Cantidad a sumar (usá negativo para restar)', type: 'number', step: 1, min: -999999, req: true, full: true }
-        ], {}, function (o) { ps.stock += Math.round(o.delta); save(); toast('Stock actualizado: ' + ps.stock); draw(); });
+        ], {}, function (o) { return act(api('POST', '/products/' + ps.id + '/stock', { delta: o.delta }), null, function (np) { toast('Stock actualizado: ' + np.stock); draw(); }); });
       }
       if (b.dataset.del) {
         var pd = byId(db.products, b.dataset.del);
-        if (confirm('¿Borrar "' + pd.name + '"? Las ventas anteriores se mantienen.')) {
-          db.products = db.products.filter(function (x) { return x.id !== pd.id; }); save(); toast('Producto borrado'); draw();
-        }
+        if (confirm('¿Borrar "' + pd.name + '"? Las ventas anteriores se mantienen.')) act(api('DELETE', '/products/' + pd.id), 'Producto borrado', draw);
       }
     });
     $('#exp', el).addEventListener('click', function () {
-      csv('productos.csv', [['Codigo', 'Nombre', 'Categoria', 'Costo', 'Precio', 'IVA', 'Stock', 'StockMinimo']].concat(
-        db.products.map(function (p) { return [p.code, p.name, p.category, p.cost, p.price, p.iva, p.stock, p.minStock]; })));
+      csv('productos.csv', [['Codigo', 'Nombre', 'Categoria'].concat(adm ? ['Costo'] : []).concat(['Precio', 'IVA', 'Stock', 'StockMinimo'])].concat(
+        db.products.map(function (p) { return [p.code, p.name, p.category].concat(adm ? [p.cost] : []).concat([p.price, p.iva, p.stock, p.minStock]); })));
     });
     draw();
   };
@@ -483,6 +488,7 @@
     };
   }
   views.clientes = function (el) {
+    var adm = isAdmin();
     el.innerHTML = '<div class="head"><h1>Clientes</h1><div class="actions"><button class="btn" id="exp">Exportar CSV</button><button class="btn primary" id="add">+ Nuevo cliente</button></div></div>' +
       '<div class="toolbar"><input type="search" id="q" placeholder="Buscar por nombre, RUT, teléfono…"><select id="dbt"><option value="">Todos</option><option value="1">Con saldo pendiente</option></select></div><div id="list"></div>';
     function draw() {
@@ -494,28 +500,22 @@
         list.map(function (x) {
           return '<tr><td><b>' + esc(x.c.name) + '</b><div class="small muted">' + esc(x.c.address) + '</div></td><td>' + esc(x.c.doc) + '</td><td>' + esc(x.c.phone) + '</td>' +
             '<td class="num">' + x.s.count + '</td><td class="num">' + money(x.s.total) + '</td><td class="num">' + (x.s.debt ? '<span class="pill pendiente">' + money(x.s.debt) + '</span>' : '—') + '</td>' +
-            '<td class="act"><button class="btn sm" data-hist="' + x.c.id + '">Historial</button><button class="btn sm" data-edit="' + x.c.id + '">Editar</button><button class="btn sm danger" data-del="' + x.c.id + '">Borrar</button></td></tr>';
+            '<td class="act"><button class="btn sm" data-hist="' + x.c.id + '">Historial</button><button class="btn sm" data-edit="' + x.c.id + '">Editar</button>' + (adm ? '<button class="btn sm danger" data-del="' + x.c.id + '">Borrar</button>' : '') + '</td></tr>';
         }).join('') + '</tbody></table></div>' : '<div class="card empty">No hay clientes' + (db.clients.length ? ' con ese filtro' : ' todavía') + '.</div>';
     }
     ['q', 'dbt'].forEach(function (id) { $('#' + id, el).addEventListener('input', draw); });
     $('#add', el).addEventListener('click', function () {
-      formModal('Nuevo cliente', clientFields, {}, function (o) { o.id = uid(); db.clients.push(o); save(); toast('Cliente creado'); draw(); });
+      formModal('Nuevo cliente', clientFields, {}, function (o) { return act(api('POST', '/clients', o), 'Cliente creado', draw); });
     });
     $('#list', el).addEventListener('click', function (e) {
       var b = e.target.closest('button'); if (!b) return;
       if (b.dataset.edit) {
         var c = byId(db.clients, b.dataset.edit);
-        formModal('Editar cliente', clientFields, c, function (o) {
-          Object.assign(c, o);
-          db.sales.forEach(function (s) { if (s.clientId === c.id) s.clientName = c.name; });
-          save(); toast('Cliente actualizado'); draw();
-        });
+        formModal('Editar cliente', clientFields, c, function (o) { return act(api('PUT', '/clients/' + c.id, o), 'Cliente actualizado', draw); });
       }
       if (b.dataset.del) {
         var cd = byId(db.clients, b.dataset.del);
-        if (confirm('¿Borrar a "' + cd.name + '"? Sus ventas se mantienen con el nombre guardado.')) {
-          db.clients = db.clients.filter(function (x) { return x.id !== cd.id; }); save(); toast('Cliente borrado'); draw();
-        }
+        if (confirm('¿Borrar a "' + cd.name + '"? Sus ventas se mantienen con el nombre guardado.')) act(api('DELETE', '/clients/' + cd.id), 'Cliente borrado', draw);
       }
       if (b.dataset.hist) {
         var ch = byId(db.clients, b.dataset.hist), st = clientStats(ch.id);
@@ -535,18 +535,19 @@
   // ----- Reportes -----
   views.reportes = function (el) {
     var d30 = new Date(); d30.setDate(d30.getDate() - 29);
-    el.innerHTML = '<div class="head"><h1>Reportes</h1></div>' +
+    el.innerHTML = '<div class="head"><h1>Reportes</h1></div>' + (isAdmin() ? '' : '<p class="muted small">Reportes de tus ventas.</p>') +
       '<div class="toolbar"><label class="small muted">Desde <input type="date" id="from" value="' + dayKey(d30) + '"></label>' +
       '<label class="small muted">Hasta <input type="date" id="to" value="' + dayKey(new Date()) + '"></label></div><div id="rep"></div>';
     function draw() {
       var from = $('#from', el).value, to = $('#to', el).value;
       var list = activeSales().filter(function (s) { var k = dayKey(s.date); return (!from || k >= from) && (!to || k <= to); });
-      var total = 0, iva = 0, cost = 0, prods = {}, clients = {}, pays = {}, perDay = {};
+      var total = 0, iva = 0, cost = 0, prods = {}, clients = {}, pays = {}, sellers = {}, perDay = {};
       list.forEach(function (s) {
         total += s.total; iva += s.iva; cost += s.cost || 0;
         perDay[dayKey(s.date)] = (perDay[dayKey(s.date)] || 0) + s.total;
         pays[s.payment] = (pays[s.payment] || 0) + s.total;
         clients[s.clientName] = (clients[s.clientName] || 0) + s.total;
+        sellers[s.userName || '—'] = (sellers[s.userName || '—'] || 0) + s.total;
         var f = s.gross ? s.total / s.gross : 1;
         s.items.forEach(function (it) {
           var p = prods[it.name] || (prods[it.name] = { qty: 0, amount: 0 });
@@ -565,20 +566,23 @@
           return '<div class="list-row" style="display:block"><div style="display:flex;justify-content:space-between;gap:8px"><span>' + esc(x.k) + '</span><b>' + fmt(x) + '</b></div><div class="bar-h"><i style="width:' + (x.v / max * 100).toFixed(1) + '%"></i></div></div>';
         }).join('') : '<p class="muted">Sin datos en el período.</p>';
       }
+      var m = function (x) { return money(x.v); };
       $('#rep', el).innerHTML =
         '<div class="grid kpis"><div class="card kpi accent"><span>Ventas</span><b>' + money(total) + '</b><span>' + list.length + ' ventas</span></div>' +
         '<div class="card kpi"><span>Neto sin IVA</span><b>' + money(net) + '</b></div>' +
         '<div class="card kpi"><span>IVA a declarar</span><b>' + money(iva) + '</b></div>' +
-        '<div class="card kpi"><span>Margen bruto</span><b>' + money(margin) + '</b><span class="muted small">' + (net ? (margin / net * 100).toFixed(1) : 0) + '% sobre neto</span></div></div>' +
+        (isAdmin() ? '<div class="card kpi"><span>Margen bruto</span><b>' + money(margin) + '</b><span class="muted small">' + (net ? (margin / net * 100).toFixed(1) : 0) + '% sobre neto</span></div>'
+          : '<div class="card kpi"><span>Ticket promedio</span><b>' + money(list.length ? total / list.length : 0) + '</b></div>') + '</div>' +
         '<div class="card" style="margin-top:16px"><h2>Ventas por día</h2>' + barChart(days) + '</div>' +
         '<div class="grid half" style="margin-top:16px">' +
         '<div class="card"><h2>Productos más vendidos</h2>' + ranking(prods, 'amount', function (x) { return x.o.qty + ' u. · ' + money(x.v); }) + '</div>' +
-        '<div class="card"><h2>Mejores clientes</h2>' + ranking(clients, null, function (x) { return money(x.v); }) + '</div>' +
-        '<div class="card"><h2>Por medio de pago</h2>' + ranking(pays, null, function (x) { return money(x.v); }) + '</div>' +
+        '<div class="card"><h2>Mejores clientes</h2>' + ranking(clients, null, m) + '</div>' +
+        (isAdmin() ? '<div class="card"><h2>Por vendedor</h2>' + ranking(sellers, null, m) + '</div>' : '') +
+        '<div class="card"><h2>Por medio de pago</h2>' + ranking(pays, null, m) + '</div>' +
         '<div class="card"><h2>Exportar</h2><p class="muted">Descargá el detalle de ventas del período para Excel.</p><button class="btn primary" id="expR">Exportar ventas del período (CSV)</button></div></div>';
       $('#expR', el).addEventListener('click', function () {
-        var rows = [['Numero', 'Fecha', 'Cliente', 'Producto', 'Cantidad', 'PrecioUnit', 'IVA', 'Importe', 'Pago', 'Estado']];
-        list.forEach(function (s) { s.items.forEach(function (it) { rows.push([s.number, fmtDateTime(s.date), s.clientName, it.name, it.qty, it.price, it.iva + '%', round2(it.qty * it.price), s.payment, s.status]); }); });
+        var rows = [['Numero', 'Fecha', 'Cliente', 'Vendedor', 'Producto', 'Cantidad', 'PrecioUnit', 'IVA', 'Importe', 'Pago', 'Estado']];
+        list.forEach(function (s) { s.items.forEach(function (it) { rows.push([s.number, fmtDateTime(s.date), s.clientName, s.userName, it.name, it.qty, it.price, it.iva + '%', round2(it.qty * it.price), s.payment, s.status]); }); });
         csv('reporte-ventas.csv', rows);
       });
     }
@@ -587,9 +591,48 @@
   };
 
   // ----- Configuración -----
+  var userFields = function (isNew) {
+    return [
+      { name: 'name', label: 'Nombre', req: true, full: true },
+      { name: 'email', label: 'Email (para entrar)', type: 'email', req: true, auto: 'off' },
+      { name: 'role', label: 'Rol', type: 'select', options: [{ v: 'vendedor', t: 'Vendedor' }, { v: 'admin', t: 'Administrador' }], def: 'vendedor' },
+      { name: 'password', label: isNew ? 'Contraseña (mín. 8 caracteres)' : 'Nueva contraseña (dejá vacío para no cambiarla)', type: 'password', req: isNew, auto: 'new-password' },
+      { name: 'active', label: 'Estado', type: 'select', options: [{ v: '1', t: 'Activo' }, { v: '0', t: 'Inactivo (no puede entrar)' }], def: '1' }
+    ];
+  };
+  function userBody(o) { return { name: o.name, email: o.email, role: o.role, password: o.password || undefined, active: o.active !== '0' }; }
+
+  function passwordCard() {
+    return '<div class="card"><h2>Mi contraseña</h2><p class="muted small">Entraste como <b>' + esc(db.me.email) + '</b> (' + ROLE_NAMES[db.me.role] + ').</p>' +
+      '<button class="btn" id="myPw">Cambiar mi contraseña</button></div>';
+  }
+  function bindPasswordCard(el) {
+    $('#myPw', el).addEventListener('click', function () {
+      formModal('Cambiar mi contraseña', [
+        { name: 'current', label: 'Contraseña actual', type: 'password', req: true, full: true, auto: 'current-password' },
+        { name: 'password', label: 'Nueva contraseña (mín. 8 caracteres)', type: 'password', req: true, full: true, auto: 'new-password' }
+      ], {}, function (o) { return api('POST', '/me/password', o).then(function () { toast('Contraseña cambiada'); }, function (e) { toast(e.message, true); throw e; }); });
+    });
+  }
+
   views.config = function (el) {
+    if (!isAdmin()) {
+      el.innerHTML = '<div class="head"><h1>Configuración</h1></div><div class="grid half">' + passwordCard() + '</div>';
+      bindPasswordCard(el);
+      return;
+    }
     var st = db.settings;
-    el.innerHTML = '<div class="head"><h1>Configuración</h1></div><div class="grid half">' +
+    el.innerHTML = '<div class="head"><h1>Configuración</h1></div>' +
+      '<div class="card" style="margin-bottom:16px"><div class="head" style="margin-bottom:10px"><h2 style="margin:0">Usuarios</h2><button class="btn primary" id="addUser">+ Nuevo usuario</button></div>' +
+      '<p class="muted small">Los <b>administradores</b> ven y manejan todo. Los <b>vendedores</b> registran ventas y clientes y solo ven sus propias ventas.</p>' +
+      '<div class="tbl-wrap"><table><thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Estado</th><th class="num">Ventas</th><th></th></tr></thead><tbody>' +
+      db.users.slice().sort(function (a, b) { return a.name.localeCompare(b.name); }).map(function (u) {
+        var n = db.sales.filter(function (s) { return s.userId === u.id && s.status !== 'anulada'; }).length;
+        return '<tr><td><b>' + esc(u.name) + '</b>' + (u.id === db.me.id ? ' <span class="pill">vos</span>' : '') + '</td><td>' + esc(u.email) + '</td><td>' + ROLE_NAMES[u.role] + '</td>' +
+          '<td>' + (u.active ? '<span class="pill pagada">activo</span>' : '<span class="pill anulada">inactivo</span>') + '</td><td class="num">' + n + '</td>' +
+          '<td class="act"><button class="btn sm" data-uedit="' + u.id + '">Editar</button>' + (u.id === db.me.id ? '' : '<button class="btn sm danger" data-udel="' + u.id + '">Borrar</button>') + '</td></tr>';
+      }).join('') + '</tbody></table></div></div>' +
+      '<div class="grid half">' +
       '<div class="card"><h2>Datos de la empresa</h2><p class="muted small">Salen en los comprobantes.</p><form class="form" id="cfg">' +
       field({ name: 'company', label: 'Nombre', full: true, req: true }, st.company) +
       field({ name: 'rut', label: 'RUT' }, st.rut) + field({ name: 'phone', label: 'Teléfono' }, st.phone) +
@@ -597,49 +640,66 @@
       field({ name: 'nextNumber', label: 'Próximo N.º de venta', type: 'number', step: 1, min: 1 }, st.nextNumber) +
       field({ name: 'lowStockDefault', label: 'Stock mínimo por defecto', type: 'number', step: 1 }, st.lowStockDefault) +
       '<div class="full"><button class="btn primary">Guardar</button></div></form></div>' +
-      '<div class="card"><h2>Respaldo de datos</h2><p class="muted small">Tus datos se guardan en este navegador. Descargá un respaldo seguido y usalo para pasarlos a otro equipo.</p>' +
+      '<div style="display:grid;gap:16px;align-content:start">' + passwordCard() +
+      '<div class="card"><h2>Respaldo de datos</h2><p class="muted small">Los datos se guardan en la base de datos del servidor. Igual conviene descargar un respaldo cada tanto.</p>' +
       '<p class="small">' + db.products.length + ' productos · ' + db.clients.length + ' clientes · ' + db.sales.length + ' ventas</p>' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn dark" id="bk">Descargar respaldo</button>' +
       '<label class="btn">Restaurar respaldo<input type="file" id="rs" accept=".json,application/json" hidden></label></div>' +
       '<hr style="border:0;border-top:1px solid #ececec;margin:20px 0"><h2>Zona de cuidado</h2>' +
-      '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="demo">Cargar datos de ejemplo</button><button class="btn danger" id="wipe">Borrar todos los datos</button></div></div></div>';
+      '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="demo">Cargar datos de ejemplo</button><button class="btn danger" id="wipe">Borrar productos, clientes y ventas</button></div></div></div></div>';
 
+    $('#addUser', el).addEventListener('click', function () {
+      formModal('Nuevo usuario', userFields(true), {}, function (o) { return act(api('POST', '/users', userBody(o)), 'Usuario creado'); });
+    });
+    $$('[data-uedit]', el).forEach(function (b) {
+      b.addEventListener('click', function () {
+        var u = byId(db.users, b.dataset.uedit);
+        formModal('Editar usuario', userFields(false), { name: u.name, email: u.email, role: u.role, active: u.active ? '1' : '0' },
+          function (o) { return act(api('PUT', '/users/' + u.id, userBody(o)), 'Usuario actualizado'); });
+      });
+    });
+    $$('[data-udel]', el).forEach(function (b) {
+      b.addEventListener('click', function () {
+        var u = byId(db.users, b.dataset.udel);
+        if (confirm('¿Borrar el usuario ' + u.name + ' (' + u.email + ')? Sus ventas se mantienen. Si solo querés que no entre más, editalo y ponelo inactivo.')) act(api('DELETE', '/users/' + u.id), 'Usuario borrado');
+      });
+    });
     $('#cfg', el).addEventListener('submit', function (e) {
       e.preventDefault();
       var f = this.elements;
-      st.company = f.company.value.trim(); st.rut = f.rut.value.trim(); st.phone = f.phone.value.trim(); st.address = f.address.value.trim();
-      st.nextNumber = Math.max(1, Math.round(num(f.nextNumber.value)));
-      st.lowStockDefault = Math.max(0, Math.round(num(f.lowStockDefault.value)));
-      save(); toast('Configuración guardada');
+      act(api('PUT', '/settings', { company: f.company.value, rut: f.rut.value, phone: f.phone.value, address: f.address.value, nextNumber: f.nextNumber.value, lowStockDefault: f.lowStockDefault.value }), 'Configuración guardada');
     });
+    bindPasswordCard(el);
     $('#bk', el).addEventListener('click', function () {
-      download('svc-respaldo-' + dayKey(new Date()) + '.json', JSON.stringify(db, null, 2), 'application/json');
+      api('GET', '/backup').then(function (data) {
+        download('svc-respaldo-' + dayKey(new Date()) + '.json', JSON.stringify(data, null, 2), 'application/json');
+      }).catch(function (e) { toast(e.message, true); });
     });
     $('#rs', el).addEventListener('change', function () {
       var file = this.files[0]; if (!file) return;
       var r = new FileReader();
       r.onload = function () {
-        try {
-          var data = JSON.parse(r.result);
-          if (!data || !Array.isArray(data.products) || !Array.isArray(data.sales)) throw new Error('formato');
-          if (!confirm('Esto reemplaza todos los datos actuales por los del respaldo. ¿Seguir?')) return;
-          localStorage.setItem(KEY, JSON.stringify(data)); load(); toast('Respaldo restaurado'); render();
-        } catch (e) { toast('El archivo no es un respaldo válido de SVC', true); }
+        var data;
+        try { data = JSON.parse(r.result); if (!data || !Array.isArray(data.products) || !Array.isArray(data.sales)) throw 0; }
+        catch (e) { toast('El archivo no es un respaldo válido de SVC', true); return; }
+        if (!confirm('Esto reemplaza todos los productos, clientes y ventas por los del respaldo (' + data.products.length + ' productos, ' + data.sales.length + ' ventas). Los usuarios no cambian. ¿Seguir?')) return;
+        act(api('POST', '/import', Object.assign({ mode: 'replace' }, data)), 'Respaldo restaurado');
       };
       r.readAsText(file);
     });
     $('#demo', el).addEventListener('click', function () {
       if ((db.products.length || db.sales.length) && !confirm('Se agregan productos, clientes y ventas de ejemplo a tus datos actuales. ¿Seguir?')) return;
-      seedDemo(); toast('Datos de ejemplo cargados'); render();
+      act(api('POST', '/import', demoData()), 'Datos de ejemplo cargados');
     });
     $('#wipe', el).addEventListener('click', function () {
-      if (!confirm('¿Borrar TODOS los productos, clientes y ventas de este navegador? No se puede deshacer. Descargá un respaldo antes.')) return;
-      db = emptyDB(); save(); toast('Datos borrados'); render();
+      if (!confirm('¿Borrar TODOS los productos, clientes y ventas? Los usuarios se mantienen. No se puede deshacer: descargá un respaldo antes.')) return;
+      if (prompt('Para confirmar escribí BORRAR') !== 'BORRAR') return;
+      act(api('POST', '/import', { mode: 'replace', products: [], clients: [], sales: [] }), 'Datos borrados');
     });
   };
 
   // ---------- datos de ejemplo ----------
-  function seedDemo() {
+  function demoData() {
     var P = [
       ['BEB-001', 'Agua mineral 2 L', 'Bebidas', 38, 65, 22, 120], ['BEB-002', 'Refresco cola 1,5 L', 'Bebidas', 70, 119, 22, 80],
       ['BEB-003', 'Jugo de naranja 1 L', 'Bebidas', 55, 95, 22, 40], ['ALM-001', 'Arroz 1 kg', 'Almacén', 45, 72, 10, 90],
@@ -648,49 +708,88 @@
       ['LIM-002', 'Lavandina 2 L', 'Limpieza', 40, 69, 22, 3], ['LAC-001', 'Leche entera 1 L', 'Lácteos', 32, 48, 10, 70],
       ['LAC-002', 'Queso dambo kg', 'Lácteos', 290, 459, 10, 18], ['PAN-001', 'Galletitas surtidas', 'Panadería', 48, 79, 22, 50]
     ];
-    var newP = P.map(function (x) { return { id: uid(), code: x[0], name: x[1], category: x[2], cost: x[3], price: x[4], iva: x[5], stock: x[6], minStock: 5 }; });
+    var tag = uid();
+    var products = P.map(function (x, i) { return { id: 'p-demo-' + tag + i, code: x[0] + (db.products.some(function (p) { return p.code === x[0]; }) ? '-' + tag.slice(-3) : ''), name: x[1], category: x[2], cost: x[3], price: x[4], iva: x[5], stock: x[6], minStock: 5 }; });
     var C = [['Almacén El Puerto', '211234560019', '099 123 456', 'Rambla 1234, Montevideo'], ['Kiosco Central', '4.567.890-1', '098 765 432', '18 de Julio 900'],
       ['Super Del Barrio', '217654320015', '2900 1122', 'Av. Italia 3300'], ['Restorán La Esquina', '214445550012', '091 222 333', 'Sarandí 450'],
       ['María Fernández', '3.456.789-0', '094 555 666', 'Pocitos'], ['Distribuidora Norte', '219998880017', '4732 1100', 'Salto']];
-    var newC = C.map(function (x) { return { id: uid(), name: x[0], doc: x[1], phone: x[2], email: '', address: x[3], notes: '' }; });
-    db.products = db.products.concat(newP);
-    db.clients = db.clients.concat(newC);
+    var clients = C.map(function (x, i) { return { id: 'c-demo-' + tag + i, name: x[0], doc: x[1], phone: x[2], email: '', address: x[3], notes: '' }; });
     var rnd = function (n) { return Math.floor(Math.random() * n); };
+    var sales = [];
     for (var i = 0; i < 70; i++) {
       var date = new Date(); date.setDate(date.getDate() - rnd(30)); date.setHours(8 + rnd(11), rnd(60), 0, 0);
       var items = [], used = {};
       for (var j = 0, n = 1 + rnd(4); j < n; j++) {
-        var p = newP[rnd(newP.length)]; if (used[p.id]) continue; used[p.id] = 1;
+        var p = products[rnd(products.length)]; if (used[p.id]) continue; used[p.id] = 1;
         items.push({ productId: p.id, name: p.name, code: p.code, qty: 1 + rnd(6), price: p.price, iva: p.iva, cost: p.cost });
       }
-      var c = rnd(4) ? newC[rnd(newC.length)] : null;
+      var c = rnd(4) ? clients[rnd(clients.length)] : null;
       var pay = PAYMENTS[rnd(c ? 5 : 4)];
       var status = pay === 'Cuenta corriente' ? (rnd(2) ? 'pendiente' : 'pagada') : (rnd(10) ? 'pagada' : 'entregada');
-      var disc = rnd(6) ? 0 : 5;
-      var s = { id: uid(), number: 0, date: date.toISOString(), clientId: c ? c.id : '', clientName: c ? c.name : 'Consumidor final',
-        items: items, discountPct: disc, payment: pay, status: status, notes: '' };
-      Object.assign(s, calcSale(items, disc));
-      db.sales.push(s);
+      sales.push({ id: 's-demo-' + tag + i, date: date.toISOString(), clientId: c ? c.id : '', clientName: c ? c.name : 'Consumidor final',
+        items: items, discountPct: rnd(6) ? 0 : 5, payment: pay, status: status, notes: '' });
     }
-    db.sales.sort(function (a, b) { return a.date.localeCompare(b.date); });
-    db.sales.forEach(function (s) { if (!s.number) s.number = db.settings.nextNumber++; });
-    save();
+    return { mode: 'merge', products: products, clients: clients, sales: sales };
   }
 
-  // ---------- router ----------
+  // ---------- login y arranque ----------
+  function showLogin() {
+    $('#shell').hidden = true; closeModal();
+    $('#login').hidden = false;
+    var f = $('#loginForm'); f.elements.password.value = '';
+    setTimeout(function () { (f.elements.email.value ? f.elements.password : f.elements.email).focus(); }, 0);
+  }
+  $('#loginForm').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var f = this, err = $('#loginErr'), btn = $('button', f);
+    err.hidden = true; btn.disabled = true;
+    api('POST', '/login', { email: f.elements.email.value, password: f.elements.password.value })
+      .then(function () { return start(); })
+      .catch(function (e2) { err.textContent = e2.message; err.hidden = false; })
+      .then(function () { btn.disabled = false; });
+  });
+
+  function drawWho() {
+    $('#who').innerHTML = '<b>' + esc(db.me.name) + '</b><span class="em">' + esc(db.me.email) + '</span><br><span class="role">' + ROLE_NAMES[db.me.role] + '</span><br><button id="logout">Salir</button>';
+    $('#logout').addEventListener('click', function () {
+      api('POST', '/logout', {}).catch(function () {}).then(function () { cart.items = []; showLogin(); });
+    });
+  }
+
   function render() {
+    if (!db.me) return;
     var name = (location.hash.replace(/^#\/?/, '') || 'panel').split('?')[0];
     if (!views[name]) name = 'panel';
     $$('.side a.nav').forEach(function (a) { a.classList.toggle('on', a.getAttribute('href') === '#/' + name); });
-    closeModal();
     var el = $('#view');
+    var y = window.scrollY, same = el.dataset.view === name;
+    closeModal();
     el.innerHTML = '';
+    el.dataset.view = name;
     views[name](el);
     document.title = 'SVC · ' + ($('.side a.nav.on') ? $('.side a.nav.on').textContent.replace(/^\W+/, '') : 'Sistema de Ventas');
-    window.scrollTo(0, 0);
+    window.scrollTo(0, same ? y : 0);
   }
-  window.addEventListener('hashchange', render);
-  window.addEventListener('storage', function (e) { if (e.key === KEY) { load(); render(); } });
-  load();
-  render();
+
+  function start() {
+    return refresh().then(function () {
+      $('#login').hidden = true;
+      $('#shell').hidden = false;
+      drawWho();
+      $('#view').dataset.view = '';
+      render();
+    });
+  }
+  window.addEventListener('hashchange', function () { if (db.me) { $('#view').dataset.view = ''; render(); } });
+  // Si otro usuario cargó ventas, se ven al volver a la pestaña.
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden && db.me && !$('#modal-root').innerHTML && $('#view').dataset.view !== 'venta') refresh().then(render).catch(function () {});
+  });
+
+  $('#view').innerHTML = '<div class="loading">Cargando…</div>';
+  start().catch(function (e) {
+    if (!$('#login').hidden) return; // ya mostró el login (sesión vencida)
+    $('#shell').hidden = false;
+    $('#view').innerHTML = '<div class="card empty">' + esc(e.message) + ' <button class="btn sm" onclick="location.reload()">Reintentar</button></div>';
+  });
 })();
