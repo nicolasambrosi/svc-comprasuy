@@ -25,7 +25,16 @@ node serve.js
 
 Abrí http://localhost:5173
 
-## 3. Publicarlo (elegí una opción)
+## 3. Dónde está publicado
+
+- **Sitio en vivo:** https://svc.comprasuy.com (Web App de Node.js en Hostinger, archivo de entrada `serve.js`).
+- **Repo que despliega Hostinger:** `github.com/nambrosi-Proyectos/svc-comprasuy` (privado, copia hecha por Hostinger).
+- **Repo original:** `github.com/nicolasambrosi/svc-comprasuy` (público).
+
+Para publicar un cambio: subilo al repo `nambrosi-Proyectos/svc-comprasuy` (Hostinger redespliega solo),
+o en hPanel → svc.comprasuy.com → Despliegues → Redesplegar.
+
+## Otras formas de publicarlo
 
 **Netlify (la más fácil, gratis):**
 1. Entrá a https://app.netlify.com/drop
