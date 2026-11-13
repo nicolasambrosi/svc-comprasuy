@@ -20,6 +20,7 @@ async function main() {
 
   await store.init();
   await auth.ensureInitialAdmin();
+  await require('./server/seed').seedCatalog().catch(err => console.error('No se pudo cargar el catálogo inicial:', err));
   setInterval(() => auth.cleanSessions().catch(() => {}), 6 * 3600e3).unref();
 
   app.use('/api', api());

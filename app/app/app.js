@@ -54,6 +54,30 @@
   }
   var byId = function (list, id) { for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i]; return null; };
 
+  // ---------- imágenes de productos ----------
+  function thumb(p, cls) {
+    return p.image ? '<img class="' + (cls || 'thumb') + '" src="/api/images/' + encodeURIComponent(p.image) + '" alt="" loading="lazy">'
+      : '<span class="' + (cls || 'thumb') + ' noimg" aria-hidden="true">' + esc((p.name || '?').charAt(0).toUpperCase()) + '</span>';
+  }
+  // Achica la foto en el navegador (máx. 640 px, JPG) antes de subirla.
+  function shrinkImage(file) {
+    return new Promise(function (ok, bad) {
+      if (!/^image\//.test(file.type)) { bad(new Error('Elegí un archivo de imagen (JPG, PNG o WEBP).')); return; }
+      var url = URL.createObjectURL(file), img = new Image();
+      img.onload = function () {
+        var max = 640, k = Math.min(1, max / Math.max(img.width, img.height));
+        var c = document.createElement('canvas');
+        c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+        var g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+        g.drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        ok(c.toDataURL('image/jpeg', 0.82));
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); bad(new Error('No se pudo leer esa imagen.')); };
+      img.src = url;
+    });
+  }
+
   // ---------- UI helpers ----------
   var toastTimer;
   function toast(msg, err) {
@@ -227,10 +251,19 @@
     function drawProducts() {
       var q = $('#q', el).value.toLowerCase(), cat = $('#cat', el).value;
       var list = db.products.filter(function (p) {
-        return (!cat || p.category === cat) && (!q || (p.name + ' ' + p.code + ' ' + p.category).toLowerCase().indexOf(q) >= 0);
+        return (!cat || p.category === cat) && (!q || (p.name + ' ' + p.code + ' ' + p.category + ' ' + (p.description || '')).toLowerCase().indexOf(q) >= 0);
       }).sort(function (a, b) { return a.name.localeCompare(b.name); });
       $('#prods', el).innerHTML = list.length ? list.map(function (p) {
-        return '<button class="prod' + (p.stock <= 0 ? ' out' : '') + '" data-id="' + p.id + '"><span class="muted small">' + esc(p.code || p.category) + '</span><b>' + esc(p.name) + '</b><span class="p">' + money(p.price) + '</span><span class="small ' + (p.stock <= p.minStock ? 'pill low' : 'muted') + '">Stock: ' + p.stock + '</span></button>';
+        var it = inCart(p.id);
+        return '<div class="prod' + (p.stock <= 0 ? ' out' : '') + (it ? ' incart' : '') + '" data-id="' + p.id + '">' +
+          '<button type="button" class="prod-pick" data-add title="Agregar ' + esc(p.name) + '">' + thumb(p, 'pimg') +
+          (it ? '<span class="badge">' + it.qty + '</span>' : '') +
+          '<b>' + esc(p.name) + '</b>' + (p.description ? '<span class="muted small">' + esc(p.description) + '</span>' : '') +
+          '<span class="p">' + money(p.price) + '</span><span class="small ' + (p.stock <= p.minStock ? 'pill low' : 'muted') + '">Stock: ' + p.stock + '</span></button>' +
+          '<div class="qrow"><button type="button" class="qb" data-step="-1" aria-label="Menos">−</button>' +
+          '<input type="number" min="1" step="1" value="1" inputmode="numeric" aria-label="Cantidad a agregar">' +
+          '<button type="button" class="qb" data-step="1" aria-label="Más">+</button>' +
+          '<button type="button" class="btn sm primary" data-add>Agregar</button></div></div>';
       }).join('') : '<div class="card empty" style="grid-column:1/-1">No hay productos.' + (isAdmin() ? ' <a href="#/productos">Cargá tus productos</a>.' : ' Pedile a un administrador que los cargue.') + '</div>';
     }
     function inCart(id) { for (var i = 0; i < cart.items.length; i++) if (cart.items[i].productId === id) return cart.items[i]; return null; }
@@ -242,7 +275,9 @@
       $('#cart', el).innerHTML = '<h2>Carrito</h2>' +
         (cart.items.length ? cart.items.map(function (it, i) {
           return '<div class="cart-line"><div><b>' + esc(it.name) + '</b><div class="muted small">' + money(it.price) + ' c/u</div></div>' +
-            '<input type="number" min="1" step="1" value="' + it.qty + '" data-qty="' + i + '" aria-label="Cantidad">' +
+            '<div class="qrow"><button type="button" class="qb" data-cstep="-1" data-i="' + i + '" aria-label="Menos">−</button>' +
+            '<input type="number" min="1" step="1" inputmode="numeric" value="' + it.qty + '" data-qty="' + i + '" aria-label="Cantidad">' +
+            '<button type="button" class="qb" data-cstep="1" data-i="' + i + '" aria-label="Más">+</button></div>' +
             '<b>' + money(it.qty * it.price) + '</b><button class="x" data-rm="' + i + '" title="Quitar">×</button></div>';
         }).join('') : '<p class="muted">Tocá un producto para agregarlo.</p>') +
         '<div class="form" style="margin-top:14px">' +
@@ -266,14 +301,31 @@
 
     $('#q', el).addEventListener('input', drawProducts);
     $('#cat', el).addEventListener('change', drawProducts);
-    $('#prods', el).addEventListener('click', function (e) {
-      var b = e.target.closest('.prod'); if (!b) return;
-      var p = byId(db.products, b.dataset.id);
-      var it = inCart(p.id), want = (it ? it.qty : 0) + 1;
-      if (want > p.stock) { toast('Sin stock suficiente de ' + p.name + ' (quedan ' + p.stock + ')', true); return; }
+    function addToCart(p, q) {
+      var it = inCart(p.id), want = (it ? it.qty : 0) + q;
+      if (want > p.stock) { toast('Sin stock suficiente de ' + p.name + ' (quedan ' + p.stock + (it ? ', ya tenés ' + it.qty + ' en el carrito' : '') + ')', true); return false; }
       if (it) it.qty = want;
-      else cart.items.push({ productId: p.id, name: p.name, code: p.code, qty: 1, price: p.price, iva: p.iva, cost: p.cost });
-      drawCart();
+      else cart.items.push({ productId: p.id, name: p.name, code: p.code, qty: q, price: p.price, iva: p.iva, cost: p.cost });
+      toast(q + ' × ' + p.name + ' agregado' + (q > 1 ? 's' : ''));
+      return true;
+    }
+    function refreshTile(card) {
+      var it = inCart(card.dataset.id), pick = $('.prod-pick', card), badge = $('.badge', card);
+      card.classList.toggle('incart', !!it);
+      if (it && !badge) { badge = document.createElement('span'); badge.className = 'badge'; pick.insertBefore(badge, pick.children[1]); }
+      if (badge) { if (it) badge.textContent = it.qty; else badge.remove(); }
+    }
+    $('#prods', el).addEventListener('click', function (e) {
+      var card = e.target.closest('.prod'); if (!card) return;
+      var input = $('.qrow input', card);
+      var step = e.target.closest('[data-step]');
+      if (step) { input.value = Math.max(1, Math.floor(num(input.value) || 1) + Number(step.dataset.step)); return; }
+      if (!e.target.closest('[data-add]')) return;
+      var p = byId(db.products, card.dataset.id), q = Math.max(1, Math.floor(num(input.value) || 1));
+      if (addToCart(p, q)) { input.value = 1; refreshTile(card); drawCart(); }
+    });
+    $('#prods', el).addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && e.target.matches('.qrow input')) { e.preventDefault(); $('.qrow [data-add]', e.target.closest('.prod')).click(); }
     });
     $('#cart', el).addEventListener('change', function (e) {
       var t = e.target;
@@ -282,6 +334,7 @@
         var q = Math.max(1, Math.floor(num(t.value)));
         if (p && q > p.stock) { toast('Solo quedan ' + p.stock + ' de ' + p.name, true); q = Math.max(1, p.stock); }
         it.qty = q;
+        drawProducts();
       }
       if (t.id === 'cClient') cart.clientId = t.value;
       if (t.id === 'cPay') { cart.payment = t.value; if (t.value === 'Cuenta corriente') cart.status = 'pendiente'; }
@@ -291,8 +344,15 @@
       drawCart();
     });
     $('#cart', el).addEventListener('click', function (e) {
-      if (e.target.dataset.rm != null) { cart.items.splice(+e.target.dataset.rm, 1); drawCart(); }
-      if (e.target.id === 'clear') { cart.items = []; drawCart(); }
+      var cs = e.target.closest('[data-cstep]');
+      if (cs) {
+        var it = cart.items[+cs.dataset.i], p = byId(db.products, it.productId), q = it.qty + Number(cs.dataset.cstep);
+        if (q < 1) return;
+        if (p && q > p.stock) { toast('Solo quedan ' + p.stock + ' de ' + p.name, true); return; }
+        it.qty = q; drawCart(); drawProducts(); return;
+      }
+      if (e.target.dataset.rm != null) { cart.items.splice(+e.target.dataset.rm, 1); drawCart(); drawProducts(); }
+      if (e.target.id === 'clear') { cart.items = []; drawCart(); drawProducts(); }
       if (e.target.id === 'checkout') checkout(e.target);
     });
 
@@ -410,6 +470,7 @@
   var productFields = function () {
     return [
       { name: 'name', label: 'Nombre', req: true, full: true },
+      { name: 'description', label: 'Presentación / descripción', ph: 'Ej.: caja x 20 botellas', full: true },
       { name: 'code', label: 'Código / SKU' },
       { name: 'category', label: 'Categoría', ph: 'Ej.: Bebidas' },
       { name: 'cost', label: 'Costo ($U)', type: 'number' },
@@ -419,6 +480,44 @@
       { name: 'minStock', label: 'Avisar cuando el stock baje de', type: 'number', step: 1, def: db.settings.lowStockDefault }
     ];
   };
+  // Alta / edición de producto, con foto.
+  function productModal(p, after) {
+    var fields = productFields(), cur = p || {};
+    var newImg = null, removeImg = false;
+    var html = '<form class="form">' +
+      '<div class="f full img-pick"><div class="img-prev" id="imgPrev">' + thumb(cur, 'big') + '</div><div>' +
+      '<b>Imagen del producto</b><p class="muted small">Ayuda a reconocerlo rápido en Nueva venta. Podés sacar una foto con el celular.</p>' +
+      '<label class="btn sm">Elegir imagen<input type="file" id="imgFile" accept="image/*" hidden></label> ' +
+      '<button type="button" class="btn sm danger" id="imgDel"' + (cur.image ? '' : ' hidden') + '>Quitar imagen</button></div></div>' +
+      fields.map(function (f) { return field(f, cur[f.name]); }).join('') +
+      '<div class="foot full"><button type="button" class="btn" data-close>Cancelar</button><button class="btn primary">Guardar</button></div></form>';
+    openModal(p ? 'Editar producto' : 'Nuevo producto', html, function (m) {
+      var form = $('form', m), prev = $('#imgPrev', m), del = $('#imgDel', m);
+      $('#imgFile', m).addEventListener('change', function (e) {
+        var file = e.target.files[0]; if (!file) return;
+        shrinkImage(file).then(function (dataUrl) {
+          newImg = dataUrl; removeImg = false;
+          prev.innerHTML = '<img class="big" src="' + dataUrl + '" alt="">'; del.hidden = false;
+        }, function (err) { toast(err.message, true); });
+      });
+      del.addEventListener('click', function () {
+        newImg = null; removeImg = true; prev.innerHTML = thumb({ name: form.elements.name.value }, 'big'); del.hidden = true;
+      });
+      form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var out = {};
+        fields.forEach(function (f) { var raw = form.elements[f.name].value; out[f.name] = f.type === 'number' || f.numeric ? num(raw) : raw.trim(); });
+        var btn = $('button.primary', form); btn.disabled = true;
+        var save = p ? api('PUT', '/products/' + p.id, out) : api('POST', '/products', out);
+        var chain = save.then(function (saved) {
+          if (newImg) return api('PUT', '/products/' + saved.id + '/image', { dataUrl: newImg });
+          if (removeImg && cur.image) return api('DELETE', '/products/' + saved.id + '/image');
+          return saved;
+        });
+        act(chain, p ? 'Producto actualizado' : 'Producto creado', after).then(closeModal, function () { btn.disabled = false; });
+      });
+    });
+  }
   views.productos = function (el) {
     var adm = isAdmin();
     el.innerHTML = '<div class="head"><h1>Productos</h1><div class="actions"><button class="btn" id="exp">Exportar CSV</button>' +
@@ -432,25 +531,21 @@
         return (!cat || p.category === cat) && (!lw || p.stock <= p.minStock) &&
           (!q || (p.name + ' ' + p.code + ' ' + p.category).toLowerCase().indexOf(q) >= 0);
       }).sort(function (a, b) { return a.name.localeCompare(b.name); });
-      $('#list', el).innerHTML = list.length ? '<div class="tbl-wrap"><table><thead><tr><th>Código</th><th>Producto</th><th>Categoría</th>' + (adm ? '<th class="num">Costo</th>' : '') + '<th class="num">Precio</th>' + (adm ? '<th class="num">Margen</th>' : '') + '<th class="num">IVA</th><th class="num">Stock</th>' + (adm ? '<th></th>' : '') + '</tr></thead><tbody>' +
+      $('#list', el).innerHTML = list.length ? '<div class="tbl-wrap"><table><thead><tr><th></th><th>Producto</th><th>Categoría</th>' + (adm ? '<th class="num">Costo</th>' : '') + '<th class="num">Precio</th>' + (adm ? '<th class="num">Margen</th>' : '') + '<th class="num">IVA</th><th class="num">Stock</th>' + (adm ? '<th></th>' : '') + '</tr></thead><tbody>' +
         list.map(function (p) {
           var net = p.price / (1 + p.iva / 100), margin = net ? (net - p.cost) / net * 100 : 0;
-          return '<tr><td class="muted">' + esc(p.code) + '</td><td><b>' + esc(p.name) + '</b></td><td>' + esc(p.category) + '</td>' + (adm ? '<td class="num">' + money(p.cost) + '</td>' : '') + '<td class="num">' + money(p.price) + '</td>' +
+          return '<tr><td class="tdimg">' + thumb(p) + '</td><td><b>' + esc(p.name) + '</b>' +
+            ((p.description || p.code) ? '<div class="small muted">' + esc([p.code, p.description].filter(Boolean).join(' · ')) + '</div>' : '') + '</td><td>' + esc(p.category) + '</td>' + (adm ? '<td class="num">' + money(p.cost) + '</td>' : '') + '<td class="num">' + money(p.price) + '</td>' +
             (adm ? '<td class="num">' + (p.cost ? margin.toFixed(0) + '%' : '—') + '</td>' : '') + '<td class="num">' + p.iva + '%</td>' +
             '<td class="num"><span class="' + (p.stock <= p.minStock ? 'pill low' : '') + '">' + p.stock + '</span></td>' +
             (adm ? '<td class="act"><button class="btn sm" data-stock="' + p.id + '">± Stock</button><button class="btn sm" data-edit="' + p.id + '">Editar</button><button class="btn sm danger" data-del="' + p.id + '">Borrar</button></td>' : '') + '</tr>';
         }).join('') + '</tbody></table></div>' : '<div class="card empty">No hay productos' + (db.products.length ? ' con ese filtro' : ' todavía') + '.</div>';
     }
     ['q', 'cat', 'lw'].forEach(function (id) { $('#' + id, el).addEventListener('input', draw); });
-    if (adm) $('#add', el).addEventListener('click', function () {
-      formModal('Nuevo producto', productFields(), {}, function (o) { return act(api('POST', '/products', o), 'Producto creado'); });
-    });
+    if (adm) $('#add', el).addEventListener('click', function () { productModal(null); });
     $('#list', el).addEventListener('click', function (e) {
       var b = e.target.closest('button'); if (!b) return;
-      if (b.dataset.edit) {
-        var p = byId(db.products, b.dataset.edit);
-        formModal('Editar producto', productFields(), p, function (o) { return act(api('PUT', '/products/' + p.id, o), 'Producto actualizado'); });
-      }
+      if (b.dataset.edit) productModal(byId(db.products, b.dataset.edit));
       if (b.dataset.stock) {
         var ps = byId(db.products, b.dataset.stock);
         formModal('Ajustar stock: ' + ps.name, [

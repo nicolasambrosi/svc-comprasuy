@@ -3,6 +3,7 @@ const express = require('express');
 const crypto = require('crypto');
 const store = require('./store');
 const auth = require('./auth');
+const images = require('./images');
 const { calcSale, num, round2 } = require('../app/app/calc.js');
 
 const STATUSES = ['pagada', 'pendiente', 'entregada', 'anulada'];
@@ -27,7 +28,7 @@ async function getSettings(s) { return Object.assign({}, DEFAULT_SETTINGS, await
 function cleanProduct(b, old) {
   const p = Object.assign({}, old);
   p.name = str(b.name, 150); if (!p.name) fail(400, 'El producto necesita un nombre.');
-  p.code = str(b.code, 60); p.category = str(b.category, 60);
+  p.code = str(b.code, 60); p.category = str(b.category, 60); p.description = str(b.description, 300);
   p.cost = Math.max(0, round2(num(b.cost))); p.price = Math.max(0, round2(num(b.price)));
   p.iva = IVAS.includes(int(b.iva)) ? int(b.iva) : 22;
   if (!old || b.stock !== undefined) p.stock = int(b.stock);
@@ -107,7 +108,37 @@ module.exports = function api() {
     });
     res.json(p);
   }));
-  r.delete('/products/:id', needAdmin, wrap(async (req, res) => { await store.del('products', req.params.id); res.json({ ok: true }); }));
+  r.delete('/products/:id', needAdmin, wrap(async (req, res) => {
+    const p = await store.get('products', req.params.id);
+    await store.del('products', req.params.id);
+    if (p) await images.remove(null, p.image);
+    res.json({ ok: true });
+  }));
+
+  // ---------- imágenes de productos ----------
+  r.put('/products/:id/image', needAdmin, wrap(async (req, res) => {
+    const img = images.parseDataUrl(req.body.dataUrl);
+    if (!img) fail(400, 'La imagen tiene que ser JPG, PNG o WEBP y pesar menos de 1,5 MB.');
+    const p = await store.get('products', req.params.id); if (!p) fail(404, 'Producto no encontrado.');
+    const old = p.image;
+    p.image = await images.save(null, img);
+    await store.put('products', p);
+    await images.remove(null, old);
+    res.json(p);
+  }));
+  r.delete('/products/:id/image', needAdmin, wrap(async (req, res) => {
+    const p = await store.get('products', req.params.id); if (!p) fail(404, 'Producto no encontrado.');
+    const old = p.image; delete p.image;
+    await store.put('products', p);
+    await images.remove(null, old);
+    res.json(p);
+  }));
+  r.get('/images/:id', needUser, wrap(async (req, res) => {
+    const doc = await store.get('images', req.params.id); if (!doc) fail(404, 'Imagen no encontrada.');
+    // Cada imagen nueva tiene otro id, así que el navegador puede guardarla para siempre.
+    res.set('Cache-Control', 'private, max-age=31536000, immutable');
+    res.type(doc.type).send(Buffer.from(doc.data, 'base64'));
+  }));
 
   // ---------- clientes ----------
   r.post('/clients', needUser, wrap(async (req, res) => {
@@ -240,7 +271,11 @@ module.exports = function api() {
       if (replace) { await s.clear('products'); await s.clear('clients'); await s.clear('sales'); }
       const settings = await getSettings(s);
       if (replace && b.settings) Object.assign(settings, { company: str(b.settings.company, 120) || settings.company, rut: str(b.settings.rut, 30), address: str(b.settings.address, 200), phone: str(b.settings.phone, 40) });
-      for (const p of b.products) { const c = cleanProduct(p); c.id = str(p.id, 90) || uid('p'); await s.put('products', c); }
+      for (const p of b.products) {
+        const c = cleanProduct(p); c.id = str(p.id, 90) || uid('p');
+        if (p.image && await s.get('images', str(p.image, 90))) c.image = str(p.image, 90); // la imagen sigue en la base
+        await s.put('products', c);
+      }
       for (const c0 of b.clients || []) { const c = cleanClient(c0); c.id = str(c0.id, 90) || uid('c'); await s.put('clients', c); }
       const sales = b.sales.slice().sort((x, y) => String(x.date).localeCompare(String(y.date)));
       let maxNumber = replace ? 0 : settings.nextNumber - 1;

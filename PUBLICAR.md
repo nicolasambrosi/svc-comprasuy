@@ -33,6 +33,14 @@ En hPanel → **Bases de datos → Administración** se crea una base MySQL. Des
 - Una vez creado el administrador, la contraseña se cambia desde la app (Configuración → Mi contraseña);
   cambiar `INITIAL_ADMIN_PASSWORD` después no tiene efecto.
 
+### Catálogo inicial
+
+`seed/catalogo-comprasuy.json` tiene los 172 productos del catálogo de Treinta (catalogo.treinta.co/comprasuycomercios)
+con categoría, presentación, precio con IVA, stock e imagen. Se carga solo **una vez**, al primer arranque con la base
+sin productos (queda marcado en la configuración). El IVA se cargó en 22% para todos: revisá los que lleven 10%.
+
+Las imágenes de productos se guardan en la base (colección `images`) y se sirven en `/api/images/<id>`.
+
 ## 2. Usuarios y roles
 
 En **Configuración → Usuarios** (solo administradores) se crean, editan, desactivan o borran usuarios.
