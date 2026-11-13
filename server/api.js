@@ -181,6 +181,10 @@ module.exports = function api() {
       const sale = Object.assign({
         id: uid('s'), number: settings.nextNumber, date: new Date().toISOString(),
         clientId: client ? client.id : '', clientName: client ? client.name : 'Consumidor final',
+        // Datos para la entrega: los que se escribieron al cobrar o, si no, los de la ficha del cliente.
+        clientDoc: client ? client.doc || '' : '',
+        deliveryAddress: str(b.deliveryAddress, 200) || (client ? client.address || '' : ''),
+        deliveryPhone: str(b.deliveryPhone, 40) || (client ? client.phone || '' : ''),
         items, discountPct, payment, status, notes: str(b.notes, 500),
         userId: req.user.id, userName: req.user.name
       }, calcSale(items, discountPct));
@@ -292,6 +296,7 @@ module.exports = function api() {
         await s.put('sales', Object.assign({
           id: str(x.id, 90) || uid('s'), number, date: isNaN(d) ? new Date().toISOString() : d.toISOString(),
           clientId: str(x.clientId, 90), clientName: str(x.clientName, 150) || 'Consumidor final', items, discountPct,
+          clientDoc: str(x.clientDoc, 30), deliveryAddress: str(x.deliveryAddress, 200), deliveryPhone: str(x.deliveryPhone, 40),
           payment: PAYMENTS.includes(x.payment) ? x.payment : 'Efectivo', status: STATUSES.includes(x.status) ? x.status : 'pagada',
           notes: str(x.notes, 500), userId: str(x.userId, 90) || req.user.id, userName: str(x.userName, 100) || req.user.name
         }, calcSale(items, discountPct)));

@@ -229,7 +229,8 @@
   };
 
   // ----- Nueva venta (punto de venta) -----
-  var cart = { items: [], clientId: '', payment: 'Efectivo', status: 'pagada', discount: 0, notes: '' };
+  var newCart = function () { return { items: [], clientId: '', payment: 'Efectivo', status: 'pagada', discount: 0, notes: '', address: '', phone: '' }; };
+  var cart = newCart();
 
   views.venta = function (el) {
     el.innerHTML =
@@ -282,6 +283,8 @@
         }).join('') : '<p class="muted">Tocá un producto para agregarlo.</p>') +
         '<div class="form" style="margin-top:14px">' +
         '<label class="f full">Cliente<select id="cClient">' + clientOpts + '</select></label>' +
+        '<label class="f full">Dirección de entrega<input id="cAddr" value="' + esc(cart.address) + '" placeholder="Calle, número, apto., barrio" autocomplete="off"></label>' +
+        '<label class="f">Teléfono<input id="cPhone" type="tel" value="' + esc(cart.phone) + '" placeholder="09X XXX XXX" autocomplete="off"></label>' +
         '<label class="f">Medio de pago<select id="cPay">' + PAYMENTS.map(function (p) { return '<option' + (p === cart.payment ? ' selected' : '') + '>' + p + '</option>'; }).join('') + '</select></label>' +
         '<label class="f">Estado<select id="cStatus">' + STATUSES.filter(function (s) { return s !== 'anulada'; }).map(function (s) { return '<option value="' + s + '"' + (s === cart.status ? ' selected' : '') + '>' + s[0].toUpperCase() + s.slice(1) + '</option>'; }).join('') + '</select></label>' +
         '<label class="f">Descuento %<input id="cDisc" type="number" min="0" max="100" step="any" value="' + cart.discount + '"></label>' +
@@ -336,7 +339,13 @@
         it.qty = q;
         drawProducts();
       }
-      if (t.id === 'cClient') cart.clientId = t.value;
+      if (t.id === 'cClient') {
+        cart.clientId = t.value;
+        var cl = byId(db.clients, t.value); // trae dirección y teléfono de la ficha del cliente
+        cart.address = cl ? cl.address || '' : ''; cart.phone = cl ? cl.phone || '' : '';
+      }
+      if (t.id === 'cAddr') { cart.address = t.value.trim(); return; }
+      if (t.id === 'cPhone') { cart.phone = t.value.trim(); return; }
       if (t.id === 'cPay') { cart.payment = t.value; if (t.value === 'Cuenta corriente') cart.status = 'pendiente'; }
       if (t.id === 'cStatus') cart.status = t.value;
       if (t.id === 'cDisc') cart.discount = Math.min(Math.max(num(t.value), 0), 100);
@@ -358,14 +367,16 @@
 
     function checkout(btn) {
       cart.notes = $('#cNotes', el).value;
+      cart.address = $('#cAddr', el).value.trim(); cart.phone = $('#cPhone', el).value.trim();
       if (cart.status === 'pendiente' && !cart.clientId) { toast('Elegí un cliente para dejar la venta pendiente de cobro', true); return; }
       btn.disabled = true;
       var body = {
         items: cart.items.map(function (it) { return { productId: it.productId, qty: it.qty }; }),
-        clientId: cart.clientId, payment: cart.payment, status: cart.status, discountPct: cart.discount, notes: cart.notes
+        clientId: cart.clientId, payment: cart.payment, status: cart.status, discountPct: cart.discount, notes: cart.notes,
+        deliveryAddress: cart.address, deliveryPhone: cart.phone
       };
       api('POST', '/sales', body).then(function (sale) {
-        cart = { items: [], clientId: '', payment: 'Efectivo', status: 'pagada', discount: 0, notes: '' };
+        cart = newCart();
         return refresh().then(function () {
           drawProducts(); drawCart();
           toast('Venta N.º ' + sale.number + ' registrada');
@@ -413,13 +424,144 @@
       });
     });
   }
+  // ---------- impresión (ticket térmico / etiqueta / A4) ----------
+  // El formato se guarda en cada equipo, porque cada uno puede tener otra impresora.
+  var PRINT_FORMATS = [
+    { v: 't80', t: 'Ticket térmico 80 mm', w: 80 },
+    { v: 't58', t: 'Ticket térmico 58 mm', w: 58 },
+    { v: 'e100x150', t: 'Etiqueta 100 × 150 mm', w: 100, h: 150, label: true },
+    { v: 'e100x100', t: 'Etiqueta 100 × 100 mm', w: 100, h: 100, label: true },
+    { v: 'e60x40', t: 'Etiqueta 60 × 40 mm (solo envío)', w: 60, h: 40, label: true, mini: true },
+    { v: 'custom', t: 'Etiqueta a medida…', label: true },
+    { v: 'a4', t: 'Hoja A4', w: 210 }
+  ];
+  function printPrefs() {
+    var d = { f: 't80', w: 100, h: 150 };
+    try { var s = JSON.parse(localStorage.getItem('svc-print') || 'null'); if (s && s.f) d = s; } catch (e) { /* sin almacenamiento */ }
+    return d;
+  }
+  function savePrintPrefs(p) { try { localStorage.setItem('svc-print', JSON.stringify(p)); } catch (e) { /* nada */ } }
+  function printFormat(p) {
+    var f = PRINT_FORMATS.filter(function (x) { return x.v === p.f; })[0] || PRINT_FORMATS[0];
+    if (f.v === 'custom') f = { v: 'custom', t: 'Etiqueta ' + p.w + ' × ' + p.h + ' mm', w: Math.max(30, num(p.w) || 100), h: Math.max(20, num(p.h) || 150), label: true, mini: num(p.h) < 70 };
+    return f;
+  }
+  // Datos de entrega de una venta (las ventas viejas toman los de la ficha del cliente).
+  function delivery(s) {
+    var c = s.clientId ? byId(db.clients, s.clientId) : null;
+    return { address: s.deliveryAddress || (c && c.address) || '', phone: s.deliveryPhone || (c && c.phone) || '', doc: s.clientDoc || (c && c.doc) || '' };
+  }
+  function printDoc(s, f) {
+    var st = db.settings, d = delivery(s), m = function (n) { return money(n).replace('$U ', '$'); };
+    var css, body;
+    if (f.label) {
+      var mini = f.mini;
+      css = '@page{size:' + f.w + 'mm ' + f.h + 'mm;margin:0}' +
+        'body{width:' + f.w + 'mm;height:' + f.h + 'mm;padding:' + (mini ? '2mm' : '4mm') + ';font-size:' + (mini ? '8pt' : '10pt') + '}' +
+        '.lb-top{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:.6mm solid #000;padding-bottom:1.5mm;margin-bottom:2mm}' +
+        '.lb-top b{font-size:' + (mini ? '9pt' : '12pt') + '}.num{font-size:' + (mini ? '11pt' : '16pt') + ';font-weight:800;text-align:right}' +
+        '.to{font-size:' + (mini ? '7pt' : '9pt') + ';font-weight:700;letter-spacing:.05em}' +
+        '.name{font-size:' + (mini ? '11pt' : '16pt') + ';font-weight:800;line-height:1.15;margin:.5mm 0 1mm}' +
+        '.addr{font-size:' + (mini ? '9pt' : '13pt') + ';font-weight:700;line-height:1.2}' +
+        '.tel{font-size:' + (mini ? '10pt' : '14pt') + ';font-weight:800;margin-top:1mm}' +
+        '.box{border:.5mm solid #000;border-radius:1.5mm;padding:2mm;margin-bottom:2mm}' +
+        'table{width:100%;border-collapse:collapse;font-size:' + (mini ? '7pt' : '9pt') + '}td{padding:.4mm 0;vertical-align:top}td.q{width:9mm;font-weight:700}td.r{text-align:right;white-space:nowrap}' +
+        '.tot{display:flex;justify-content:space-between;font-size:' + (mini ? '10pt' : '13pt') + ';font-weight:800;border-top:.6mm solid #000;margin-top:1.5mm;padding-top:1mm}' +
+        '.sm{font-size:' + (mini ? '7pt' : '8.5pt') + '}' +
+        (mini ? '.lb-top{padding-bottom:.6mm;margin-bottom:1mm;border-width:.4mm}.box{padding:1mm 1.5mm;margin-bottom:1mm;border-width:.35mm}.to{display:none}' +
+          '.name{font-size:9.5pt;margin:0}.addr{font-size:8pt;line-height:1.1}.tel{font-size:9pt;margin-top:.5mm}.tot{font-size:8.5pt;margin-top:0;padding-top:.5mm;border-width:.4mm}' : '');
+      body = '<div class="lb-top"><div><b>' + esc(st.company) + '</b>' + (st.phone && !mini ? '<div class="sm">Tel. ' + esc(st.phone) + '</div>' : '') + '</div>' +
+        '<div class="num">N.º ' + s.number + (mini ? '' : '<div class="sm" style="font-weight:400">' + fmtDateTime(s.date) + '</div>') + '</div></div>' +
+        '<div class="box"><div class="to">ENTREGAR A</div><div class="name">' + esc(s.clientName) + '</div>' +
+        (d.address ? '<div class="addr">' + esc(d.address) + '</div>' : '<div class="sm">(sin dirección)</div>') +
+        (d.phone ? '<div class="tel">Tel. ' + esc(d.phone) + '</div>' : '') + '</div>' +
+        (mini ? '<div class="tot"><span>' + s.items.reduce(function (a, it) { return a + it.qty; }, 0) + ' art. · ' + esc(s.payment) + '</span><span>' + m(s.total) + '</span></div>' :
+          '<table>' + s.items.map(function (it) { return '<tr><td class="q">' + it.qty + '×</td><td>' + esc(it.name) + '</td><td class="r">' + m(it.qty * it.price) + '</td></tr>'; }).join('') + '</table>' +
+          '<div class="tot"><span>TOTAL</span><span>' + m(s.total) + '</span></div>' +
+          '<div class="sm" style="margin-top:1mm">Pago: ' + esc(s.payment) + ' · ' + esc(s.status) + (s.notes ? '<br>Nota: ' + esc(s.notes) : '') + '</div>');
+    } else if (f.v === 'a4') {
+      css = '@page{size:A4;margin:14mm}body{font-size:10.5pt}h1{font-size:16pt;margin:0}' +
+        '.hd{display:flex;justify-content:space-between;border-bottom:2px solid #000;padding-bottom:3mm;margin-bottom:4mm}' +
+        'table{width:100%;border-collapse:collapse;margin-top:4mm}th,td{padding:1.5mm 1mm;border-bottom:1px solid #999;text-align:left}th.r,td.r{text-align:right}' +
+        '.tots{width:75mm;margin:4mm 0 0 auto}.tots div{display:flex;justify-content:space-between;padding:.8mm 0}.big{font-size:14pt;font-weight:800;border-top:2px solid #000}' +
+        '.cli{display:grid;grid-template-columns:1fr 1fr;gap:1mm 8mm}';
+      body = '<div class="hd"><div><h1>' + esc(st.company) + '</h1>' + (st.rut ? 'RUT ' + esc(st.rut) + '<br>' : '') + esc(st.address) + (st.phone ? '<br>Tel. ' + esc(st.phone) : '') + '</div>' +
+        '<div style="text-align:right"><b style="font-size:13pt">Comprobante N.º ' + s.number + '</b><br>' + fmtDateTime(s.date) + '<br>' + esc(s.status) + '</div></div>' +
+        '<div class="cli"><div><b>Cliente:</b> ' + esc(s.clientName) + (d.doc ? '<br><b>RUT/CI:</b> ' + esc(d.doc) : '') + '</div>' +
+        '<div><b>Dirección de entrega:</b> ' + (esc(d.address) || '—') + '<br><b>Teléfono:</b> ' + (esc(d.phone) || '—') + '</div>' +
+        '<div><b>Pago:</b> ' + esc(s.payment) + (s.userName ? ' · <b>Vendedor:</b> ' + esc(s.userName) : '') + '</div>' + (s.notes ? '<div><b>Nota:</b> ' + esc(s.notes) + '</div>' : '') + '</div>' +
+        '<table><thead><tr><th>Producto</th><th class="r">Cant.</th><th class="r">Precio</th><th class="r">IVA</th><th class="r">Importe</th></tr></thead><tbody>' +
+        s.items.map(function (it) { return '<tr><td>' + esc(it.name) + '</td><td class="r">' + it.qty + '</td><td class="r">' + money(it.price) + '</td><td class="r">' + it.iva + '%</td><td class="r">' + money(it.qty * it.price) + '</td></tr>'; }).join('') + '</tbody></table>' +
+        '<div class="tots">' + (s.discount ? '<div><span>Descuento (' + s.discountPct + '%)</span><span>− ' + money(s.discount) + '</span></div>' : '') +
+        '<div><span>Subtotal sin IVA</span><span>' + money(s.subtotal) + '</span></div><div><span>IVA</span><span>' + money(s.iva) + '</span></div>' +
+        '<div class="big"><span>Total</span><span>' + money(s.total) + '</span></div></div>' +
+        '<p style="font-size:8.5pt;margin-top:8mm">Comprobante interno, no válido como factura electrónica (CFE).</p>';
+    } else { // ticket térmico de rollo: ancho fijo, alto automático, todo en negro
+      var w = f.w, inner = w === 58 ? 48 : 72;
+      css = '@page{size:' + w + 'mm 200mm;margin:0}body{width:' + inner + 'mm;margin:0 auto;padding:3mm 0 6mm;font-size:' + (w === 58 ? '8pt' : '9.5pt') + '}' +
+        '.c{text-align:center}.hr{border-top:1px dashed #000;margin:2mm 0}.row{display:flex;justify-content:space-between;gap:2mm}' +
+        '.it{margin-bottom:1mm}.big{font-size:' + (w === 58 ? '11pt' : '13pt') + ';font-weight:800}h1{font-size:' + (w === 58 ? '11pt' : '13pt') + ';margin:0}';
+      body = '<div class="c"><h1>' + esc(st.company) + '</h1>' + (st.rut ? 'RUT ' + esc(st.rut) + '<br>' : '') + (st.address ? esc(st.address) + '<br>' : '') + (st.phone ? 'Tel. ' + esc(st.phone) : '') + '</div>' +
+        '<div class="hr"></div><div class="row"><b>Comprobante N.º ' + s.number + '</b><span>' + fmtDateTime(s.date) + '</span></div>' +
+        '<div class="hr"></div><div><b>Cliente:</b> ' + esc(s.clientName) + (d.doc ? '<br>RUT/CI: ' + esc(d.doc) : '') +
+        (d.address ? '<br><b>Entrega:</b> ' + esc(d.address) : '') + (d.phone ? '<br><b>Tel.:</b> ' + esc(d.phone) : '') + '</div>' +
+        '<div class="hr"></div>' +
+        s.items.map(function (it) { return '<div class="it">' + esc(it.name) + '<div class="row"><span>' + it.qty + ' × ' + m(it.price) + '</span><span>' + m(it.qty * it.price) + '</span></div></div>'; }).join('') +
+        '<div class="hr"></div>' + (s.discount ? '<div class="row"><span>Descuento ' + s.discountPct + '%</span><span>− ' + m(s.discount) + '</span></div>' : '') +
+        '<div class="row"><span>Subtotal sin IVA</span><span>' + m(s.subtotal) + '</span></div><div class="row"><span>IVA</span><span>' + m(s.iva) + '</span></div>' +
+        '<div class="row big"><span>TOTAL</span><span>' + m(s.total) + '</span></div>' +
+        '<div class="hr"></div>Pago: ' + esc(s.payment) + ' · ' + esc(s.status) + (s.userName ? '<br>Vendedor: ' + esc(s.userName) : '') + (s.notes ? '<br>Nota: ' + esc(s.notes) : '') +
+        '<div class="hr"></div><div class="c">Comprobante interno, no válido como CFE.<br>¡Gracias por su compra!</div>';
+    }
+    return '<!doctype html><html><head><meta charset="utf-8"><title>Venta ' + s.number + '</title><style>' +
+      '*{box-sizing:border-box}html,body{margin:0;color:#000;background:#fff;font-family:Arial,Helvetica,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}' +
+      'body{overflow:hidden}' + css + '</style></head><body>' + body + '</body></html>';
+  }
+  // Imprime en un iframe aparte, así la página respeta el tamaño de papel elegido.
+  function printSale(s, f) {
+    var old = $('#print-frame'); if (old) old.remove();
+    var fr = document.createElement('iframe');
+    fr.id = 'print-frame'; fr.setAttribute('aria-hidden', 'true');
+    fr.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden';
+    document.body.appendChild(fr);
+    var doc = fr.contentWindow.document;
+    doc.open(); doc.write(printDoc(s, f)); doc.close();
+    setTimeout(function () {
+      if (!f.label && f.v !== 'a4') { // rollo: el alto de la hoja es el del contenido
+        var mm = Math.ceil(doc.body.scrollHeight * 25.4 / 96) + 4;
+        var stl = doc.createElement('style'); stl.textContent = '@page{size:' + f.w + 'mm ' + mm + 'mm;margin:0}';
+        doc.head.appendChild(stl);
+      }
+      fr.contentWindow.focus(); fr.contentWindow.print();
+    }, 250);
+  }
+  function printFormatOptions(p) {
+    return PRINT_FORMATS.map(function (x) { return '<option value="' + x.v + '"' + (x.v === p.f ? ' selected' : '') + '>' + esc(x.t) + '</option>'; }).join('');
+  }
+  // Selector de formato (lo usan el comprobante y Configuración). onChange recibe las preferencias.
+  function bindPrintPicker(root, onChange) {
+    var sel = $('[data-pf]', root), cw = $('[data-pw]', root), ch = $('[data-ph]', root), box = $('[data-pcustom]', root);
+    function upd() {
+      var p = { f: sel.value, w: num(cw.value) || 100, h: num(ch.value) || 150 };
+      box.hidden = p.f !== 'custom'; savePrintPrefs(p); if (onChange) onChange(p);
+    }
+    [sel, cw, ch].forEach(function (x) { x.addEventListener('change', upd); });
+    box.hidden = sel.value !== 'custom';
+  }
+  function printPickerHtml(p) {
+    return '<label class="f">Formato de impresión<select data-pf>' + printFormatOptions(p) + '</select></label>' +
+      '<div class="f pcustom" data-pcustom><span>Medida de la etiqueta (mm)</span><div class="row2"><input data-pw type="number" min="30" max="210" value="' + esc(p.w) + '" aria-label="Ancho en mm"> × <input data-ph type="number" min="20" max="300" value="' + esc(p.h) + '" aria-label="Alto en mm"></div></div>';
+  }
+
   function showReceipt(s) {
-    var st = db.settings;
+    var st = db.settings, dl = delivery(s);
     var html = '<div class="receipt"><div class="r-head"><div><h3>' + esc(st.company) + '</h3><div class="small muted">' +
       (st.rut ? 'RUT ' + esc(st.rut) + '<br>' : '') + esc(st.address) + (st.phone ? '<br>Tel. ' + esc(st.phone) : '') + '</div></div>' +
       '<div style="text-align:right"><b>Comprobante N.º ' + s.number + '</b><div class="small">' + fmtDateTime(s.date) + '</div>' +
       '<span class="pill ' + s.status + '">' + s.status + '</span></div></div>' +
-      '<p><b>Cliente:</b> ' + esc(s.clientName) + '<br><b>Pago:</b> ' + esc(s.payment) + (s.userName ? '<br><b>Vendedor:</b> ' + esc(s.userName) : '') + (s.notes ? '<br><b>Nota:</b> ' + esc(s.notes) : '') + '</p>' +
+      '<p><b>Cliente:</b> ' + esc(s.clientName) + (dl.doc ? ' · RUT/CI ' + esc(dl.doc) : '') +
+      '<br><b>Dirección de entrega:</b> ' + (esc(dl.address) || '<span class="muted">—</span>') +
+      '<br><b>Teléfono:</b> ' + (esc(dl.phone) || '<span class="muted">—</span>') + '<br><b>Pago:</b> ' + esc(s.payment) + (s.userName ? '<br><b>Vendedor:</b> ' + esc(s.userName) : '') + (s.notes ? '<br><b>Nota:</b> ' + esc(s.notes) : '') + '</p>' +
       '<table><thead><tr><th>Producto</th><th class="num">Cant.</th><th class="num">Precio</th><th class="num">IVA</th><th class="num">Importe</th></tr></thead><tbody>' +
       s.items.map(function (it) {
         return '<tr><td>' + esc(it.name) + '</td><td class="num">' + it.qty + '</td><td class="num">' + money(it.price) + '</td><td class="num">' + it.iva + '%</td><td class="num">' + money(it.qty * it.price) + '</td></tr>';
@@ -430,8 +572,12 @@
       '<div class="tot"><span>IVA</span><span>' + money(s.iva) + '</span></div>' +
       '<div class="tot big"><span>Total</span><span>' + money(s.total) + '</span></div></div>' +
       '<p class="small muted" style="margin-top:14px">Comprobante interno, no válido como factura electrónica (CFE).</p></div>' +
+      '<div class="form print-pick">' + printPickerHtml(printPrefs()) + '</div>' +
       '<div class="foot"><button class="btn" data-close>Cerrar</button><button class="btn primary" id="print">Imprimir</button></div>';
-    openModal('Venta N.º ' + s.number, html, function (m) { $('#print', m).addEventListener('click', function () { window.print(); }); }, true);
+    openModal('Venta N.º ' + s.number, html, function (m) {
+      bindPrintPicker(m);
+      $('#print', m).addEventListener('click', function () { printSale(s, printFormat(printPrefs())); });
+    }, true);
   }
 
   views.ventas = function (el) {
@@ -701,6 +847,25 @@
     return '<div class="card"><h2>Mi contraseña</h2><p class="muted small">Entraste como <b>' + esc(db.me.email) + '</b> (' + ROLE_NAMES[db.me.role] + ').</p>' +
       '<button class="btn" id="myPw">Cambiar mi contraseña</button></div>';
   }
+  function printCard() {
+    return '<div class="card" id="printCard"><h2>Impresión en este equipo</h2>' +
+      '<p class="muted small">Elegí el papel de tu impresora. Para impresoras térmicas usá ticket (rollo de 80 o 58 mm) o etiqueta. ' +
+      'Se guarda en este equipo: cada computadora o celular puede tener otra impresora. En la ventana de impresión elegí la impresora térmica y márgenes “Ninguno”.</p>' +
+      '<div class="form">' + printPickerHtml(printPrefs()) + '</div>' +
+      '<button class="btn" id="printTest" style="margin-top:10px">Imprimir prueba</button></div>';
+  }
+  function bindPrintCard(el) {
+    var card = $('#printCard', el); if (!card) return;
+    bindPrintPicker(card);
+    $('#printTest', card).addEventListener('click', function () {
+      var p = db.products.slice(0, 2);
+      var items = p.map(function (x, i) { return { productId: x.id, name: x.name, qty: i + 1, price: x.price, iva: x.iva, cost: 0 }; });
+      if (!items.length) items = [{ name: 'Producto de prueba', qty: 2, price: 100, iva: 22, cost: 0 }];
+      var sale = Object.assign({ number: 0, date: new Date().toISOString(), clientName: 'Cliente de prueba', deliveryAddress: 'Av. 18 de Julio 1234, apto. 5', deliveryPhone: '099 123 456',
+        items: items, payment: 'Efectivo', status: 'pagada', discountPct: 0, userName: db.me.name, notes: 'Impresión de prueba' }, calcSale(items, 0));
+      printSale(sale, printFormat(printPrefs()));
+    });
+  }
   function bindPasswordCard(el) {
     $('#myPw', el).addEventListener('click', function () {
       formModal('Cambiar mi contraseña', [
@@ -712,8 +877,8 @@
 
   views.config = function (el) {
     if (!isAdmin()) {
-      el.innerHTML = '<div class="head"><h1>Configuración</h1></div><div class="grid half">' + passwordCard() + '</div>';
-      bindPasswordCard(el);
+      el.innerHTML = '<div class="head"><h1>Configuración</h1></div><div class="grid half">' + passwordCard() + printCard() + '</div>';
+      bindPasswordCard(el); bindPrintCard(el);
       return;
     }
     var st = db.settings;
@@ -735,7 +900,7 @@
       field({ name: 'nextNumber', label: 'Próximo N.º de venta', type: 'number', step: 1, min: 1 }, st.nextNumber) +
       field({ name: 'lowStockDefault', label: 'Stock mínimo por defecto', type: 'number', step: 1 }, st.lowStockDefault) +
       '<div class="full"><button class="btn primary">Guardar</button></div></form></div>' +
-      '<div style="display:grid;gap:16px;align-content:start">' + passwordCard() +
+      '<div style="display:grid;gap:16px;align-content:start">' + passwordCard() + printCard() +
       '<div class="card"><h2>Respaldo de datos</h2><p class="muted small">Los datos se guardan en la base de datos del servidor. Igual conviene descargar un respaldo cada tanto.</p>' +
       '<p class="small">' + db.products.length + ' productos · ' + db.clients.length + ' clientes · ' + db.sales.length + ' ventas</p>' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn dark" id="bk">Descargar respaldo</button>' +
@@ -764,7 +929,7 @@
       var f = this.elements;
       act(api('PUT', '/settings', { company: f.company.value, rut: f.rut.value, phone: f.phone.value, address: f.address.value, nextNumber: f.nextNumber.value, lowStockDefault: f.lowStockDefault.value }), 'Configuración guardada');
     });
-    bindPasswordCard(el);
+    bindPasswordCard(el); bindPrintCard(el);
     $('#bk', el).addEventListener('click', function () {
       api('GET', '/backup').then(function (data) {
         download('svc-respaldo-' + dayKey(new Date()) + '.json', JSON.stringify(data, null, 2), 'application/json');
