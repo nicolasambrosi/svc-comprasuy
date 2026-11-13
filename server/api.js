@@ -42,6 +42,13 @@ function cleanClient(b, old) {
   return c;
 }
 const canSeeSale = (user, s) => user.role === 'admin' || s.userId === user.id;
+// Cada cliente puede tener un vendedor asignado (sellerId). Los vendedores solo ven y usan sus clientes.
+const canSeeClient = (user, c) => user.role === 'admin' || (!!c.sellerId && c.sellerId === user.id);
+async function sellerIdFrom(v) {
+  const id = str(v, 90); if (!id) return '';
+  if (!(await store.get('users', id))) fail(400, 'El vendedor elegido no existe.');
+  return id;
+}
 
 module.exports = function api() {
   const r = express.Router();
@@ -79,7 +86,7 @@ module.exports = function api() {
       store.all('products'), store.all('clients'), store.all('sales'), getSettings(), isAdmin ? store.all('users') : []
     ]);
     res.json({
-      me: auth.publicUser(req.user), settings, products, clients,
+      me: auth.publicUser(req.user), settings, products, clients: clients.filter(c => canSeeClient(req.user, c)),
       sales: sales.filter(s => canSeeSale(req.user, s)),
       users: users.map(auth.publicUser),
       storage: store.kind
@@ -143,11 +150,26 @@ module.exports = function api() {
   // ---------- clientes ----------
   r.post('/clients', needUser, wrap(async (req, res) => {
     const c = cleanClient(req.body); c.id = uid('c'); c.createdBy = req.user.id;
+    // el vendedor que crea un cliente queda asignado; el administrador elige a quién (o a nadie)
+    c.sellerId = req.user.role === 'admin' ? await sellerIdFrom(req.body.sellerId) : req.user.id;
     res.json(await store.put('clients', c));
   }));
+  // asignar varios clientes a un vendedor (o dejarlos sin asignar con sellerId vacío)
+  r.post('/clients/assign', needAdmin, wrap(async (req, res) => {
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.map(x => str(x, 90)) : [];
+    if (!ids.length) fail(400, 'Elegí al menos un cliente.');
+    const sellerId = await sellerIdFrom(req.body.sellerId);
+    const n = await store.tx(async s => {
+      let count = 0;
+      for (const id of ids) { const c = await s.get('clients', id); if (c) { c.sellerId = sellerId; await s.put('clients', c); count++; } }
+      return count;
+    });
+    res.json({ ok: true, updated: n });
+  }));
   r.put('/clients/:id', needUser, wrap(async (req, res) => {
-    const old = await store.get('clients', req.params.id); if (!old) fail(404, 'Cliente no encontrado.');
+    const old = await store.get('clients', req.params.id); if (!old || !canSeeClient(req.user, old)) fail(404, 'Cliente no encontrado.');
     const c = cleanClient(req.body, old);
+    if (req.user.role === 'admin' && req.body.sellerId !== undefined) c.sellerId = await sellerIdFrom(req.body.sellerId);
     await store.put('clients', c);
     if (c.name !== old.name) { // las ventas guardan el nombre del cliente
       for (const s of await store.all('sales')) if (s.clientId === c.id) { s.clientName = c.name; await store.put('sales', s); }
@@ -165,7 +187,7 @@ module.exports = function api() {
     const status = ['pagada', 'pendiente', 'entregada'].includes(b.status) ? b.status : 'pagada';
     const discountPct = Math.min(Math.max(num(b.discountPct), 0), 100);
     const client = b.clientId ? await store.get('clients', String(b.clientId)) : null;
-    if (b.clientId && !client) fail(400, 'El cliente no existe.');
+    if (b.clientId && (!client || !canSeeClient(req.user, client))) fail(400, 'El cliente no existe o no está asignado a tu usuario.');
     if (status === 'pendiente' && !client) fail(400, 'Elegí un cliente para dejar la venta pendiente de cobro.');
 
     const sale = await store.tx(async s => {
@@ -260,6 +282,7 @@ module.exports = function api() {
     if (req.params.id === req.user.id) fail(400, 'No podés borrar tu propio usuario.');
     await checkAdminsLeft(req.params.id, false);
     await store.del('users', req.params.id);
+    for (const c of await store.all('clients')) if (c.sellerId === req.params.id) { c.sellerId = ''; await store.put('clients', c); } // quedan sin asignar
     res.json({ ok: true });
   }));
 
@@ -280,7 +303,7 @@ module.exports = function api() {
         if (p.image && await s.get('images', str(p.image, 90))) c.image = str(p.image, 90); // la imagen sigue en la base
         await s.put('products', c);
       }
-      for (const c0 of b.clients || []) { const c = cleanClient(c0); c.id = str(c0.id, 90) || uid('c'); await s.put('clients', c); }
+      for (const c0 of b.clients || []) { const c = cleanClient(c0); c.id = str(c0.id, 90) || uid('c'); c.sellerId = str(c0.sellerId, 90); await s.put('clients', c); }
       const sales = b.sales.slice().sort((x, y) => String(x.date).localeCompare(String(y.date)));
       let maxNumber = replace ? 0 : settings.nextNumber - 1;
       for (const x of sales) {

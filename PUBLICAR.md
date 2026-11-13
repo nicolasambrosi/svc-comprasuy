@@ -49,12 +49,18 @@ En **Configuración → Usuarios** (solo administradores) se crean, editan, desa
 |---|---|---|
 | Registrar ventas y clientes | ✓ | ✓ |
 | Ver ventas | todas | solo las suyas |
+| Ver clientes y venderles | todos | solo los asignados a él |
+| Asignar clientes a vendedores | ✓ (Clientes → tildar → Asignar a…) | — |
 | Cambiar estado de una venta | ✓ | ✓ (las suyas) |
 | Anular ventas (devuelve stock) | ✓ | — |
 | Productos, precios, costos, stock | ✓ | solo ver (sin costos) |
 | Borrar clientes | ✓ | — |
 | Usuarios, datos de la empresa, respaldo | ✓ | — |
 | Cambiar su propia contraseña | ✓ | ✓ |
+
+Cada cliente tiene un **vendedor asignado** (campo `sellerId` en la base). El cliente que crea un vendedor queda a su nombre;
+los que crea un administrador quedan sin asignar salvo que elija uno. Los clientes sin asignar solo los ven los administradores.
+Si se borra un usuario, sus clientes quedan sin asignar.
 
 Siempre tiene que quedar al menos un administrador activo. Tras 8 intentos fallidos de clave, ese email queda bloqueado 15 minutos.
 

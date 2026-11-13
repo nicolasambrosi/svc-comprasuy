@@ -177,3 +177,10 @@ label.f input:focus,label.f select:focus,label.f textarea:focus,.toolbar input:f
   .receipt{position:absolute;left:0;top:0;width:100%}
   .modal-bg{position:static;background:none;padding:0}
 }
+
+/* Clientes: selección y asignación de vendedor */
+th.chk,td.chk{width:34px;text-align:center}
+th.chk input,td.chk input{width:16px;height:16px;accent-color:var(--orange);cursor:pointer}
+.bulk{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px;padding:10px 12px;border:1px solid var(--orange);border-radius:12px;background:#fff7f0}
+.bulk select{padding:7px 10px;border:1px solid var(--g20);border-radius:10px;background:#fff;min-width:0;max-width:100%}
+.bulk[hidden]{display:none}

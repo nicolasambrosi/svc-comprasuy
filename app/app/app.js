@@ -719,6 +719,16 @@
     { name: 'address', label: 'Dirección' },
     { name: 'notes', label: 'Notas', type: 'textarea', full: true }
   ];
+  // Vendedor asignado a cada cliente (solo los administradores ven la lista de usuarios).
+  function sellerName(id) { var u = id ? byId(db.users, id) : null; return u ? u.name : ''; }
+  function sellerOptions(withNone) {
+    return (withNone ? [{ v: '', t: 'Sin asignar' }] : []).concat(db.users.slice().sort(function (a, b) { return a.name.localeCompare(b.name); }).map(function (u) {
+      return { v: u.id, t: u.name + (u.role === 'admin' ? ' (admin)' : '') + (u.active ? '' : ' · inactivo') };
+    }));
+  }
+  function clientFormFields() {
+    return isAdmin() ? clientFields.concat([{ name: 'sellerId', label: 'Vendedor asignado', type: 'select', full: true, options: sellerOptions(true) }]) : clientFields;
+  }
   function clientStats(id) {
     var s = db.sales.filter(function (x) { return x.clientId === id && x.status !== 'anulada'; });
     return {
@@ -731,28 +741,67 @@
   views.clientes = function (el) {
     var adm = isAdmin();
     el.innerHTML = '<div class="head"><h1>Clientes</h1><div class="actions"><button class="btn" id="exp">Exportar CSV</button><button class="btn primary" id="add">+ Nuevo cliente</button></div></div>' +
-      '<div class="toolbar"><input type="search" id="q" placeholder="Buscar por nombre, RUT, teléfono…"><select id="dbt"><option value="">Todos</option><option value="1">Con saldo pendiente</option></select></div><div id="list"></div>';
+      '<div class="toolbar"><input type="search" id="q" placeholder="Buscar por nombre, RUT, teléfono…"><select id="dbt"><option value="">Todos</option><option value="1">Con saldo pendiente</option></select>' +
+      (adm ? '<select id="sel"><option value="">Todos los vendedores</option><option value="-">Sin asignar</option>' +
+        sellerOptions(false).map(function (o) { return '<option value="' + esc(o.v) + '">' + esc(o.t) + '</option>'; }).join('') + '</select>' : '') + '</div>' +
+      (adm ? '<div class="bulk" id="bulk" hidden><b id="bulkN"></b><select id="bulkTo">' +
+        sellerOptions(true).map(function (o) { return '<option value="' + esc(o.v) + '">' + (o.v ? 'Asignar a ' : 'Dejar ') + esc(o.v ? o.t : 'sin asignar') + '</option>'; }).join('') +
+        '</select><button class="btn sm primary" id="bulkGo">Aplicar</button><button class="btn sm" id="bulkClear">Quitar selección</button></div>' : '') +
+      '<div id="list"></div>';
+    var picked = {}, shown = [];
+    function updBulk() {
+      if (!adm) return;
+      var n = Object.keys(picked).length;
+      $('#bulk', el).hidden = !n;
+      $('#bulkN', el).textContent = n + (n === 1 ? ' cliente seleccionado' : ' clientes seleccionados');
+    }
     function draw() {
-      var q = $('#q', el).value.toLowerCase(), dbt = $('#dbt', el).value;
+      var q = $('#q', el).value.toLowerCase(), dbt = $('#dbt', el).value, sel = adm ? $('#sel', el).value : '';
       var list = db.clients.map(function (c) { return { c: c, s: clientStats(c.id) }; }).filter(function (x) {
-        return (!dbt || x.s.debt > 0) && (!q || (x.c.name + ' ' + x.c.doc + ' ' + x.c.phone + ' ' + x.c.email).toLowerCase().indexOf(q) >= 0);
+        var sid = adm && x.c.sellerId && byId(db.users, x.c.sellerId) ? x.c.sellerId : '';
+        return (!dbt || x.s.debt > 0) && (!sel || (sel === '-' ? !sid : sid === sel)) &&
+          (!q || (x.c.name + ' ' + x.c.doc + ' ' + x.c.phone + ' ' + x.c.email + ' ' + sellerName(sid)).toLowerCase().indexOf(q) >= 0);
       }).sort(function (a, b) { return a.c.name.localeCompare(b.c.name); });
-      $('#list', el).innerHTML = list.length ? '<div class="tbl-wrap"><table><thead><tr><th>Cliente</th><th>RUT / CI</th><th>Teléfono</th><th class="num">Compras</th><th class="num">Total comprado</th><th class="num">Saldo pendiente</th><th></th></tr></thead><tbody>' +
+      shown = list.map(function (x) { return x.c.id; });
+      var allOn = shown.length && shown.every(function (id) { return picked[id]; });
+      $('#list', el).innerHTML = list.length ? '<p class="small muted" style="margin:0 0 8px">' + list.length + (list.length === 1 ? ' cliente' : ' clientes') + '</p><div class="tbl-wrap"><table><thead><tr>' +
+        (adm ? '<th class="chk"><input type="checkbox" id="pickAll" title="Seleccionar todos los de la lista"' + (allOn ? ' checked' : '') + '></th>' : '') +
+        '<th>Cliente</th><th>RUT / CI</th><th>Teléfono</th>' + (adm ? '<th>Vendedor</th>' : '') + '<th class="num">Compras</th><th class="num">Total comprado</th><th class="num">Saldo pendiente</th><th></th></tr></thead><tbody>' +
         list.map(function (x) {
-          return '<tr><td><b>' + esc(x.c.name) + '</b><div class="small muted">' + esc(x.c.address) + '</div></td><td>' + esc(x.c.doc) + '</td><td>' + esc(x.c.phone) + '</td>' +
+          var sn = adm ? sellerName(x.c.sellerId) : '';
+          return '<tr>' + (adm ? '<td class="chk"><input type="checkbox" data-pick="' + x.c.id + '"' + (picked[x.c.id] ? ' checked' : '') + '></td>' : '') +
+            '<td><b>' + esc(x.c.name) + '</b><div class="small muted">' + esc(x.c.address) + '</div></td><td>' + esc(x.c.doc) + '</td><td>' + esc(x.c.phone) + '</td>' +
+            (adm ? '<td>' + (sn ? esc(sn) : '<span class="muted">Sin asignar</span>') + '</td>' : '') +
             '<td class="num">' + x.s.count + '</td><td class="num">' + money(x.s.total) + '</td><td class="num">' + (x.s.debt ? '<span class="pill pendiente">' + money(x.s.debt) + '</span>' : '—') + '</td>' +
             '<td class="act"><button class="btn sm" data-hist="' + x.c.id + '">Historial</button><button class="btn sm" data-edit="' + x.c.id + '">Editar</button>' + (adm ? '<button class="btn sm danger" data-del="' + x.c.id + '">Borrar</button>' : '') + '</td></tr>';
-        }).join('') + '</tbody></table></div>' : '<div class="card empty">No hay clientes' + (db.clients.length ? ' con ese filtro' : ' todavía') + '.</div>';
+        }).join('') + '</tbody></table></div>' : '<div class="card empty">' + (!adm && !db.clients.length ? 'Todavía no tenés clientes asignados. Los clientes que crees quedan a tu nombre, y un administrador te puede asignar otros.' :
+          'No hay clientes' + (db.clients.length ? ' con ese filtro' : ' todavía') + '.') + '</div>';
+      updBulk();
     }
-    ['q', 'dbt'].forEach(function (id) { $('#' + id, el).addEventListener('input', draw); });
+    ['q', 'dbt', 'sel'].forEach(function (id) { var x = $('#' + id, el); if (x) x.addEventListener('input', draw); });
     $('#add', el).addEventListener('click', function () {
-      formModal('Nuevo cliente', clientFields, {}, function (o) { return act(api('POST', '/clients', o), 'Cliente creado', draw); });
+      formModal('Nuevo cliente', clientFormFields(), {}, function (o) { return act(api('POST', '/clients', o), 'Cliente creado', draw); });
     });
+    if (adm) {
+      $('#list', el).addEventListener('change', function (e) {
+        var t = e.target;
+        if (t.id === 'pickAll') { shown.forEach(function (id) { if (t.checked) picked[id] = 1; else delete picked[id]; }); draw(); }
+        else if (t.dataset.pick) { if (t.checked) picked[t.dataset.pick] = 1; else delete picked[t.dataset.pick]; updBulk(); }
+      });
+      $('#bulkClear', el).addEventListener('click', function () { picked = {}; draw(); });
+      $('#bulkGo', el).addEventListener('click', function () {
+        var ids = Object.keys(picked), to = $('#bulkTo', el).value, btn = this;
+        btn.disabled = true;
+        act(api('POST', '/clients/assign', { ids: ids, sellerId: to }),
+          ids.length + (ids.length === 1 ? ' cliente ' : ' clientes ') + (to ? 'asignado' + (ids.length === 1 ? '' : 's') + ' a ' + sellerName(to) : 'sin asignar'),
+          function () { picked = {}; draw(); }).then(function () { btn.disabled = false; }, function () { btn.disabled = false; });
+      });
+    }
     $('#list', el).addEventListener('click', function (e) {
       var b = e.target.closest('button'); if (!b) return;
       if (b.dataset.edit) {
         var c = byId(db.clients, b.dataset.edit);
-        formModal('Editar cliente', clientFields, c, function (o) { return act(api('PUT', '/clients/' + c.id, o), 'Cliente actualizado', draw); });
+        formModal('Editar cliente', clientFormFields(), c, function (o) { return act(api('PUT', '/clients/' + c.id, o), 'Cliente actualizado', draw); });
       }
       if (b.dataset.del) {
         var cd = byId(db.clients, b.dataset.del);
@@ -767,8 +816,8 @@
       }
     });
     $('#exp', el).addEventListener('click', function () {
-      csv('clientes.csv', [['Nombre', 'RUT_CI', 'Telefono', 'Email', 'Direccion', 'Compras', 'TotalComprado', 'SaldoPendiente']].concat(
-        db.clients.map(function (c) { var s = clientStats(c.id); return [c.name, c.doc, c.phone, c.email, c.address, s.count, round2(s.total), round2(s.debt)]; })));
+      csv('clientes.csv', [['Nombre', 'RUT_CI', 'Telefono', 'Email', 'Direccion', 'Vendedor', 'Compras', 'TotalComprado', 'SaldoPendiente']].concat(
+        db.clients.map(function (c) { var s = clientStats(c.id); return [c.name, c.doc, c.phone, c.email, c.address, adm ? sellerName(c.sellerId) : db.me.name, s.count, round2(s.total), round2(s.debt)]; })));
     });
     draw();
   };
@@ -884,12 +933,12 @@
     var st = db.settings;
     el.innerHTML = '<div class="head"><h1>Configuración</h1></div>' +
       '<div class="card" style="margin-bottom:16px"><div class="head" style="margin-bottom:10px"><h2 style="margin:0">Usuarios</h2><button class="btn primary" id="addUser">+ Nuevo usuario</button></div>' +
-      '<p class="muted small">Los <b>administradores</b> ven y manejan todo. Los <b>vendedores</b> registran ventas y clientes y solo ven sus propias ventas.</p>' +
-      '<div class="tbl-wrap"><table><thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Estado</th><th class="num">Ventas</th><th></th></tr></thead><tbody>' +
+      '<p class="muted small">Los <b>administradores</b> ven y manejan todo. Los <b>vendedores</b> registran ventas y clientes y solo ven sus propias ventas y los clientes asignados a ellos (se asignan en Clientes).</p>' +
+      '<div class="tbl-wrap"><table><thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Estado</th><th class="num">Clientes</th><th class="num">Ventas</th><th></th></tr></thead><tbody>' +
       db.users.slice().sort(function (a, b) { return a.name.localeCompare(b.name); }).map(function (u) {
         var n = db.sales.filter(function (s) { return s.userId === u.id && s.status !== 'anulada'; }).length;
         return '<tr><td><b>' + esc(u.name) + '</b>' + (u.id === db.me.id ? ' <span class="pill">vos</span>' : '') + '</td><td>' + esc(u.email) + '</td><td>' + ROLE_NAMES[u.role] + '</td>' +
-          '<td>' + (u.active ? '<span class="pill pagada">activo</span>' : '<span class="pill anulada">inactivo</span>') + '</td><td class="num">' + n + '</td>' +
+          '<td>' + (u.active ? '<span class="pill pagada">activo</span>' : '<span class="pill anulada">inactivo</span>') + '</td><td class="num">' + db.clients.filter(function (c) { return c.sellerId === u.id; }).length + '</td><td class="num">' + n + '</td>' +
           '<td class="act"><button class="btn sm" data-uedit="' + u.id + '">Editar</button>' + (u.id === db.me.id ? '' : '<button class="btn sm danger" data-udel="' + u.id + '">Borrar</button>') + '</td></tr>';
       }).join('') + '</tbody></table></div></div>' +
       '<div class="grid half">' +
