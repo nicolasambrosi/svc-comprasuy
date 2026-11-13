@@ -1,0 +1,13 @@
+{
+  "name": "svc-comprasuy",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SVC · Sistema de Ventas Comprasuy (landing + app de ventas, sitio estático)",
+  "scripts": {
+    "start": "node serve.js",
+    "dev": "node serve.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

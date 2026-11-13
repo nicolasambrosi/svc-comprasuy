@@ -1,0 +1,13 @@
+node_modules/
+# Archivos del generador anterior (no forman parte del sitio)
+capture/
+inbox/
+reference/
+investigation.cany/
+build-activity.log
+craft.json
+feed.json
+questions.json
+transcript.json
+usage.json
+.claude/
