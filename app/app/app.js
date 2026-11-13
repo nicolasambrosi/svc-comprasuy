@@ -294,7 +294,10 @@
         '<div class="tot muted"><span>IVA</span><span>' + money(t.iva) + '</span></div>' +
         (t.discount ? '<div class="tot muted"><span>Descuento</span><span>− ' + money(t.discount) + '</span></div>' : '') +
         '<div class="tot big"><span>Total</span><span>' + money(t.total) + '</span></div></div>' +
-        '<div style="display:grid;gap:8px;margin-top:14px"><button class="btn primary big" id="checkout"' + (cart.items.length ? '' : ' disabled') + '>Cobrar ' + money(t.total) + '</button>' +
+        // Guardar: registra la venta y deja el carrito listo para la próxima (sin comprobante en pantalla).
+        // Cobrar e imprimir: además abre el comprobante para imprimirlo o guardarlo en PDF.
+        '<div style="display:grid;gap:8px;margin-top:14px"><button class="btn primary big" id="checkout"' + (cart.items.length ? '' : ' disabled') + '>Guardar venta · ' + money(t.total) + '</button>' +
+        '<button class="btn dark" id="checkoutPrint"' + (cart.items.length ? '' : ' disabled') + '>Cobrar e imprimir</button>' +
         (cart.items.length ? '<button class="btn sm" id="clear">Vaciar carrito</button>' : '') + '</div>';
       var n = cart.items.reduce(function (a, it) { return a + it.qty; }, 0);
       var bar = $('#cartbar', el);
@@ -362,10 +365,11 @@
       }
       if (e.target.dataset.rm != null) { cart.items.splice(+e.target.dataset.rm, 1); drawCart(); drawProducts(); }
       if (e.target.id === 'clear') { cart.items = []; drawCart(); drawProducts(); }
-      if (e.target.id === 'checkout') checkout(e.target);
+      if (e.target.id === 'checkout') checkout(e.target, false);
+      if (e.target.id === 'checkoutPrint') checkout(e.target, true);
     });
 
-    function checkout(btn) {
+    function checkout(btn, withReceipt) {
       cart.notes = $('#cNotes', el).value;
       cart.address = $('#cAddr', el).value.trim(); cart.phone = $('#cPhone', el).value.trim();
       if (cart.status === 'pendiente' && !cart.clientId) { toast('Elegí un cliente para dejar la venta pendiente de cobro', true); return; }
@@ -379,8 +383,9 @@
         cart = newCart();
         return refresh().then(function () {
           drawProducts(); drawCart();
-          toast('Venta N.º ' + sale.number + ' registrada');
-          showReceipt(sale);
+          toast('Venta N.º ' + sale.number + ' guardada' + (withReceipt ? '' : ' · la ves en Ventas'));
+          if (withReceipt) showReceipt(sale);
+          else window.scrollTo(0, 0);
         });
       }).catch(function (e) {
         toast(e.message, true);
