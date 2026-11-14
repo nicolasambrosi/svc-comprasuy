@@ -818,8 +818,18 @@
       return { v: u.id, t: u.name + (u.role === 'admin' ? ' (admin)' : '') + (u.active ? '' : ' · inactivo') };
     }));
   }
-  function clientFormFields() {
-    return isAdmin() ? clientFields.concat([{ name: 'sellerId', label: 'Vendedor asignado', type: 'select', full: true, options: sellerOptions(true) }]) : clientFields;
+  // Zonas que puede usar: el admin todas; el supervisor las que supervisa.
+  function zoneOptions() {
+    return (db.zones || []).filter(function (z) { return isAdmin() || z.supervisorId === db.me.id; })
+      .slice().sort(function (a, b) { return a.name.localeCompare(b.name); }).map(function (z) { return { v: z.id, t: z.name }; });
+  }
+  function zoneName(id) { var z = id ? byId(db.zones || [], id) : null; return z ? z.name : ''; }
+  function clientFormFields(c) {
+    var f = isAdmin() ? clientFields.concat([{ name: 'sellerId', label: 'Vendedor asignado', type: 'select', full: true, options: sellerOptions(true) }]) : clientFields;
+    var zo = zoneOptions();
+    if (c && c.zoneId && !zo.some(function (o) { return o.v === c.zoneId; })) zo.push({ v: c.zoneId, t: zoneName(c.zoneId) || 'Otra zona' });
+    if (isBoss() && zo.length) f = f.concat([{ name: 'zoneId', label: 'Zona (para armar recorridos)', type: 'select', full: true, options: [{ v: '', t: 'Sin zona' }].concat(zo), def: '' }]);
+    return f;
   }
   function clientStats(id) {
     var s = db.sales.filter(function (x) { return x.clientId === id && x.status !== 'anulada'; });
@@ -831,57 +841,70 @@
     };
   }
   views.clientes = function (el) {
-    var adm = isAdmin();
+    var adm = isAdmin(), boss = isBoss() && zoneOptions().length > 0, chk = adm || boss;
     el.innerHTML = '<div class="head"><h1>Clientes</h1><div class="actions"><button class="btn" id="exp">Exportar CSV</button><button class="btn primary" id="add">+ Nuevo cliente</button></div></div>' +
       '<div class="toolbar"><input type="search" id="q" placeholder="Buscar por nombre, RUT, teléfono…"><select id="dbt"><option value="">Todos</option><option value="1">Con saldo pendiente</option></select>' +
       (adm ? '<select id="sel"><option value="">Todos los vendedores</option><option value="-">Sin asignar</option>' +
-        sellerOptions(false).map(function (o) { return '<option value="' + esc(o.v) + '">' + esc(o.t) + '</option>'; }).join('') + '</select>' : '') + '</div>' +
-      (adm ? '<div class="bulk" id="bulk" hidden><b id="bulkN"></b><select id="bulkTo">' +
-        sellerOptions(true).map(function (o) { return '<option value="' + esc(o.v) + '">' + (o.v ? 'Asignar a ' : 'Dejar ') + esc(o.v ? o.t : 'sin asignar') + '</option>'; }).join('') +
-        '</select><button class="btn sm primary" id="bulkGo">Aplicar</button><button class="btn sm" id="bulkClear">Quitar selección</button></div>' : '') +
+        sellerOptions(false).map(function (o) { return '<option value="' + esc(o.v) + '">' + esc(o.t) + '</option>'; }).join('') + '</select>' : '') +
+      (isBoss() && (db.zones || []).length ? '<select id="zf"><option value="">Todas las zonas</option><option value="-">Sin zona</option>' +
+        (db.zones || []).slice().sort(function (a, b) { return a.name.localeCompare(b.name); }).map(function (z) { return '<option value="' + esc(z.id) + '">' + esc(z.name) + '</option>'; }).join('') + '</select>' : '') + '</div>' +
+      (chk ? '<div class="bulk" id="bulk" hidden><b id="bulkN"></b>' +
+        (adm ? '<select id="bulkTo">' + sellerOptions(true).map(function (o) { return '<option value="' + esc(o.v) + '">' + (o.v ? 'Asignar a ' : 'Dejar ') + esc(o.v ? o.t : 'sin asignar') + '</option>'; }).join('') +
+        '</select><button class="btn sm primary" id="bulkGo">Aplicar</button>' : '') +
+        (boss ? '<select id="bulkZone">' + [{ v: '', t: 'sin zona' }].concat(zoneOptions()).map(function (o) { return '<option value="' + esc(o.v) + '">' + (o.v ? 'Poner en zona ' : 'Dejar ') + esc(o.t) + '</option>'; }).join('') +
+        '</select><button class="btn sm primary" id="bulkZoneGo">Aplicar zona</button>' : '') +
+        '<button class="btn sm" id="bulkClear">Quitar selección</button></div>' : '') +
       '<div id="list"></div>';
     var picked = {}, shown = [];
     function updBulk() {
-      if (!adm) return;
+      if (!chk) return;
       var n = Object.keys(picked).length;
       $('#bulk', el).hidden = !n;
       $('#bulkN', el).textContent = n + (n === 1 ? ' cliente seleccionado' : ' clientes seleccionados');
     }
     function draw() {
-      var q = $('#q', el).value.toLowerCase(), dbt = $('#dbt', el).value, sel = adm ? $('#sel', el).value : '';
+      var q = $('#q', el).value.toLowerCase(), dbt = $('#dbt', el).value, sel = adm ? $('#sel', el).value : '', zf = $('#zf', el) ? $('#zf', el).value : '';
       var list = db.clients.map(function (c) { return { c: c, s: clientStats(c.id) }; }).filter(function (x) {
         var sid = adm && x.c.sellerId && byId(db.users, x.c.sellerId) ? x.c.sellerId : '';
-        return (!dbt || x.s.debt > 0) && (!sel || (sel === '-' ? !sid : sid === sel)) &&
+        return (!dbt || x.s.debt > 0) && (!sel || (sel === '-' ? !sid : sid === sel)) && (!zf || (zf === '-' ? !x.c.zoneId : x.c.zoneId === zf)) &&
           (!q || (x.c.name + ' ' + x.c.doc + ' ' + x.c.phone + ' ' + x.c.email + ' ' + sellerName(sid)).toLowerCase().indexOf(q) >= 0);
       }).sort(function (a, b) { return a.c.name.localeCompare(b.c.name); });
       shown = list.map(function (x) { return x.c.id; });
       var allOn = shown.length && shown.every(function (id) { return picked[id]; });
       $('#list', el).innerHTML = list.length ? '<p class="small muted" style="margin:0 0 8px">' + list.length + (list.length === 1 ? ' cliente' : ' clientes') + '</p><div class="tbl-wrap"><table><thead><tr>' +
-        (adm ? '<th class="chk"><input type="checkbox" id="pickAll" title="Seleccionar todos los de la lista"' + (allOn ? ' checked' : '') + '></th>' : '') +
-        '<th>Cliente</th><th>RUT / CI</th><th>Teléfono</th>' + (adm ? '<th>Vendedor</th>' : '') + '<th class="num">Compras</th><th class="num">Total comprado</th><th class="num">Saldo pendiente</th><th></th></tr></thead><tbody>' +
+        (chk ? '<th class="chk"><input type="checkbox" id="pickAll" title="Seleccionar todos los de la lista"' + (allOn ? ' checked' : '') + '></th>' : '') +
+        '<th>Cliente</th><th>RUT / CI</th><th>Teléfono</th>' + (adm ? '<th>Vendedor</th>' : '') + (isBoss() ? '<th>Zona</th>' : '') + '<th class="num">Compras</th><th class="num">Total comprado</th><th class="num">Saldo pendiente</th><th></th></tr></thead><tbody>' +
         list.map(function (x) {
           var sn = adm ? sellerName(x.c.sellerId) : '';
-          return '<tr>' + (adm ? '<td class="chk"><input type="checkbox" data-pick="' + x.c.id + '"' + (picked[x.c.id] ? ' checked' : '') + '></td>' : '') +
+          return '<tr>' + (chk ? '<td class="chk"><input type="checkbox" data-pick="' + x.c.id + '"' + (picked[x.c.id] ? ' checked' : '') + '></td>' : '') +
             '<td><b>' + esc(x.c.name) + '</b><div class="small muted">' + esc(x.c.address) + '</div></td><td>' + esc(x.c.doc) + '</td><td>' + esc(x.c.phone) + '</td>' +
             (adm ? '<td>' + (sn ? esc(sn) : '<span class="muted">Sin asignar</span>') + '</td>' : '') +
+            (isBoss() ? '<td>' + (x.c.zoneId ? esc(zoneName(x.c.zoneId)) : '<span class="muted">—</span>') + '</td>' : '') +
             '<td class="num">' + x.s.count + '</td><td class="num">' + money(x.s.total) + '</td><td class="num">' + (x.s.debt ? '<span class="pill pendiente">' + money(x.s.debt) + '</span>' : '—') + '</td>' +
             '<td class="act"><button class="btn sm" data-prof="' + x.c.id + '">Perfil</button><button class="btn sm" data-hist="' + x.c.id + '">Historial</button><button class="btn sm" data-edit="' + x.c.id + '">Editar</button>' + (adm ? '<button class="btn sm danger" data-del="' + x.c.id + '">Borrar</button>' : '') + '</td></tr>';
         }).join('') + '</tbody></table></div>' : '<div class="card empty">' + (!adm && !db.clients.length ? 'Todavía no tenés clientes asignados. Los clientes que crees quedan a tu nombre, y un administrador te puede asignar otros.' :
           'No hay clientes' + (db.clients.length ? ' con ese filtro' : ' todavía') + '.') + '</div>';
       updBulk();
     }
-    ['q', 'dbt', 'sel'].forEach(function (id) { var x = $('#' + id, el); if (x) x.addEventListener('input', draw); });
+    ['q', 'dbt', 'sel', 'zf'].forEach(function (id) { var x = $('#' + id, el); if (x) x.addEventListener('input', draw); });
     $('#add', el).addEventListener('click', function () {
       formModal('Nuevo cliente', clientFormFields(), {}, function (o) { return act(api('POST', '/clients', o), 'Cliente creado', draw); });
     });
-    if (adm) {
+    if (chk) {
       $('#list', el).addEventListener('change', function (e) {
         var t = e.target;
         if (t.id === 'pickAll') { shown.forEach(function (id) { if (t.checked) picked[id] = 1; else delete picked[id]; }); draw(); }
         else if (t.dataset.pick) { if (t.checked) picked[t.dataset.pick] = 1; else delete picked[t.dataset.pick]; updBulk(); }
       });
       $('#bulkClear', el).addEventListener('click', function () { picked = {}; draw(); });
-      $('#bulkGo', el).addEventListener('click', function () {
+      if (boss) $('#bulkZoneGo', el).addEventListener('click', function () {
+        var ids = Object.keys(picked), to = $('#bulkZone', el).value, btn = this;
+        btn.disabled = true;
+        act(api('POST', '/clients/zone', { ids: ids, zoneId: to }),
+          ids.length + (ids.length === 1 ? ' comercio ' : ' comercios ') + (to ? 'en la zona ' + zoneName(to) : 'sin zona'),
+          function () { picked = {}; draw(); }).then(function () { btn.disabled = false; }, function () { btn.disabled = false; });
+      });
+      if (adm) $('#bulkGo', el).addEventListener('click', function () {
         var ids = Object.keys(picked), to = $('#bulkTo', el).value, btn = this;
         btn.disabled = true;
         act(api('POST', '/clients/assign', { ids: ids, sellerId: to }),
@@ -894,7 +917,7 @@
       if (b.dataset.prof && window.SVC.openProfile) window.SVC.openProfile(byId(db.clients, b.dataset.prof));
       if (b.dataset.edit) {
         var c = byId(db.clients, b.dataset.edit);
-        formModal('Editar cliente', clientFormFields(), c, function (o) { return act(api('PUT', '/clients/' + c.id, o), 'Cliente actualizado', draw); });
+        formModal('Editar cliente', clientFormFields(c), c, function (o) { return act(api('PUT', '/clients/' + c.id, o), 'Cliente actualizado', draw); });
       }
       if (b.dataset.del) {
         var cd = byId(db.clients, b.dataset.del);
@@ -909,8 +932,8 @@
       }
     });
     $('#exp', el).addEventListener('click', function () {
-      csv('clientes.csv', [['Nombre', 'RUT_CI', 'Telefono', 'Email', 'Direccion', 'Vendedor', 'Compras', 'TotalComprado', 'SaldoPendiente']].concat(
-        db.clients.map(function (c) { var s = clientStats(c.id); return [c.name, c.doc, c.phone, c.email, c.address, adm ? sellerName(c.sellerId) : db.me.name, s.count, round2(s.total), round2(s.debt)]; })));
+      csv('clientes.csv', [['Nombre', 'RUT_CI', 'Telefono', 'Email', 'Direccion', 'Vendedor', 'Zona', 'Compras', 'TotalComprado', 'SaldoPendiente']].concat(
+        db.clients.map(function (c) { var s = clientStats(c.id); return [c.name, c.doc, c.phone, c.email, c.address, adm ? sellerName(c.sellerId) : db.me.name, zoneName(c.zoneId), s.count, round2(s.total), round2(s.debt)]; })));
     });
     draw();
   };

@@ -307,3 +307,10 @@ ul.plain{margin:6px 0;padding-left:18px}
 .fb:first-of-type{border-top:0}
 .fb p{margin:6px 0}
 .fb-line{margin-top:6px}
+
+/* ===== Recorridos ===== */
+.rec-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px;align-items:end}
+.rec-form .f{display:flex;flex-direction:column;gap:6px;font-size:14px}
+.rec-form .f input,.rec-form .f select{padding:10px;border:1px solid var(--g20);border-radius:10px;font:inherit;background:#fff;min-width:0}
+.rec-form .f:last-child{grid-column:1/-1}
+.rec-zone{margin-bottom:16px}

@@ -170,7 +170,7 @@
     var nextIdx = -1;
     stops.forEach(function (c, i) { if (nextIdx < 0 && !visitOf(c.id)) nextIdx = i; });
 
-    el.innerHTML = '<div class="head"><div><h1>Hoy</h1><span class="muted">' + longDay(day) + (route ? ' · ruta armada por ' + esc(route.updatedBy) : '') + '</span></div>' +
+    el.innerHTML = '<div class="head"><div><h1>Hoy</h1><span class="muted">' + longDay(day) + (route ? (route.fromRecorrido ? ' · recorrido ' + esc(route.recorridos.map(function (x) { return x.name; }).join(' + ')) : ' · ruta armada por ' + esc(route.updatedBy)) : '') + '</span></div>' +
       '<div class="actions"><button class="btn" id="offRoute">+ Visita fuera de ruta</button><button class="btn" id="showMap">🗺️ Mapa</button></div></div>' +
       feedbackHtml() +
       '<div class="grid kpis hoy-kpis">' +
@@ -350,7 +350,7 @@
     var users = teamUsers();
     if (!rutaSel.sellerId || !byId(users, rutaSel.sellerId)) rutaSel.sellerId = (users.filter(function (u) { return u.role === 'vendedor'; })[0] || users[0]).id;
     if (!rutaSel.date) rutaSel.date = today();
-    var stops = [], dirty = false, scopeAll = false, weekRoutes = [];
+    var stops = [], dirty = false, scopeAll = false, weekRoutes = [], fromRec = '';
 
     el.innerHTML = '<div class="head"><h1>Rutas</h1><div class="actions">' +
       '<select id="rSeller">' + users.map(function (u) { return '<option value="' + u.id + '"' + (u.id === rutaSel.sellerId ? ' selected' : '') + '>' + esc(u.name) + ' (' + S.ROLE_NAMES[u.role] + ')</option>'; }).join('') + '</select>' +
@@ -389,7 +389,7 @@
     }
     function drawStops() {
       var u = byId(users, rutaSel.sellerId);
-      $('#rTitle', el).textContent = 'Ruta de ' + (u ? u.name : '') + ' · ' + longDay(rutaSel.date) + ' (' + stops.length + ')' + (dirty ? ' · sin guardar' : '');
+      $('#rTitle', el).textContent = 'Ruta de ' + (u ? u.name : '') + ' · ' + longDay(rutaSel.date) + ' (' + stops.length + ')' + (dirty ? ' · sin guardar' : (fromRec ? ' · del recorrido ' + fromRec : ''));
       $('#rstops', el).innerHTML = stops.length ? stops.map(function (id, i) {
         var c = byId(db().clients, id) || { name: '(cliente no disponible)' };
         return '<li class="stop"><span class="n">' + (i + 1) + '</span><div class="stop-main"><b>' + esc(c.name) + '</b><span class="muted small">' + esc(c.address || '') + (hasGeo(c) ? '' : ' · sin ubicar') + '</span></div>' +
@@ -412,6 +412,7 @@
         weekRoutes = list;
         var r = list.filter(function (x) { return x.date === rutaSel.date && x.sellerId === rutaSel.sellerId; })[0];
         stops = r ? r.stops.map(function (s) { return s.clientId; }) : [];
+        fromRec = r && r.fromRecorrido ? r.recorridos.map(function (x) { return x.name; }).join(' + ') : '';
         dirty = false; drawStops(); drawClients(); drawWeek();
       }, function (e) { toast(e.message, true); });
     }
@@ -663,6 +664,8 @@
   // ======================================================================
   // CONFIGURACIÓN (admin): zonas y ubicación de clientes
   // ======================================================================
+  // para recorridos.js
+  S.geo = { drawMap: drawMap, distanceM: distanceM, hasGeo: hasGeo, teamUsers: teamUsers, DAYS: DAYS };
   S.configExtra = function (box) {
     if (!box || !S.isAdmin()) return;
     var zones = db().zones || [], users = db().users;

@@ -50,7 +50,10 @@ module.exports = function terreno(r, h) {
     res.json(await store.put('zones', await cleanZone(req.body, old)));
   }));
   r.delete('/zones/:id', needAdmin, wrap(async (req, res) => {
+    const recs = (await store.all('recorridos')).filter(x => x.zoneId === req.params.id);
+    if (recs.length) fail(400, 'La zona tiene ' + recs.length + ' recorrido' + (recs.length > 1 ? 's' : '') + '. Borralos o pasalos a otra zona primero.');
     await store.del('zones', req.params.id);
+    for (const c of await store.all('clients')) if (c.zoneId === req.params.id) { c.zoneId = ''; await store.put('clients', c); }
     for (const u of await store.all('users')) if (u.zoneId === req.params.id) { u.zoneId = ''; await store.put('users', u); }
     res.json({ ok: true });
   }));
@@ -60,8 +63,9 @@ module.exports = function terreno(r, h) {
   r.get('/routes', needUser, wrap(async (req, res) => {
     const from = str(req.query.from || req.query.date, 10), to = str(req.query.to || from, 10);
     if (!DAY.test(from) || !DAY.test(to)) fail(400, 'Fecha inválida.');
+    if (to < from || (Date.parse(to) - Date.parse(from)) / 864e5 > 62) fail(400, 'Rango de fechas demasiado largo.');
     const sc = await scopeOf(req.user);
-    res.json((await store.all('routes')).filter(x => x.date >= from && x.date <= to && inScope(sc, x.sellerId)));
+    res.json((await plannedRoutes(from, to)).filter(x => inScope(sc, x.sellerId)));
   }));
   r.put('/routes', needBoss, wrap(async (req, res) => {
     const b = req.body, sc = await scopeOf(req.user);
@@ -72,18 +76,87 @@ module.exports = function terreno(r, h) {
     if (ids.length > 200) fail(400, 'Demasiadas visitas para un día.');
     for (const id of ids) { const c = await store.get('clients', id); if (!c || !canSeeClient(sc, c)) fail(400, 'Un cliente de la ruta no existe o no es de tu equipo.'); }
     const weeks = Math.min(Math.max(int(b.repeatWeeks), 0), 12);
-    const dates = [b.date];
+    const dates = [b.date], allRecs = await store.all('recorridos');
     for (let i = 1; i <= weeks; i++) { const d = new Date(b.date + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + 7 * i); dates.push(d.toISOString().slice(0, 10)); }
     const saved = await store.tx(async s => {
       const out = [];
       for (const date of dates) {
         const id = 'r-' + seller.id + '-' + date;
-        if (!ids.length) { await s.del('routes', id); continue; }
+        // si ese día le toca un recorrido, "vaciar" guarda la ruta vacía para que el recorrido no aparezca
+        if (!ids.length) { if (recsFor(allRecs, seller.id, date).length) out.push(await s.put('routes', { id, sellerId: seller.id, sellerName: seller.name, date, stops: [], updatedBy: req.user.name, updatedAt: new Date().toISOString() })); else await s.del('routes', id); continue; }
         out.push(await s.put('routes', { id, sellerId: seller.id, sellerName: seller.name, date, stops: ids.map(clientId => ({ clientId })), updatedBy: req.user.name, updatedAt: new Date().toISOString() }));
       }
       return out;
     });
     res.json({ ok: true, routes: saved, dates });
+  }));
+
+  // ---------- recorridos ----------
+  // Un recorrido = una lista ordenada de comercios de una zona, asignada a un vendedor en ciertos días de la semana.
+  // Para cada día, la ruta del vendedor es la guardada en Rutas (si hay) o, si no, la suma de sus recorridos de ese día.
+  const weekday = d => new Date(d + 'T12:00:00Z').getUTCDay();
+  const recsFor = (recs, sellerId, date) => recs.filter(x => x.sellerId === sellerId && (x.days || []).includes(weekday(date)) && (x.stops || []).length);
+  async function plannedRoutes(from, to) {
+    const [saved, recs, users] = await Promise.all([store.all('routes'), store.all('recorridos'), store.all('users')]);
+    const out = saved.filter(x => x.date >= from && x.date <= to), have = new Set(out.map(x => x.id));
+    const sellers = [...new Set(recs.filter(x => x.sellerId).map(x => x.sellerId))];
+    for (let d = from; d <= to; d = new Date(Date.parse(d + 'T12:00:00Z') + 864e5).toISOString().slice(0, 10)) {
+      for (const sid of sellers) {
+        const id = 'r-' + sid + '-' + d; if (have.has(id)) continue;
+        const mine = recsFor(recs, sid, d); if (!mine.length) continue;
+        const u = users.find(x => x.id === sid); if (!u || !u.active) continue;
+        const stops = [...new Set([].concat(...mine.map(x => x.stops)))];
+        out.push({ id, sellerId: sid, sellerName: u.name, date: d, stops: stops.map(clientId => ({ clientId })), recorridos: mine.map(x => ({ id: x.id, name: x.name })), fromRecorrido: true });
+      }
+    }
+    return out;
+  }
+  const canSeeRec = (sc, x) => sc.all || (x.zoneId && sc.zones.has(x.zoneId)) || (x.sellerId && inScope(sc, x.sellerId));
+  r.get('/recorridos', needUser, wrap(async (req, res) => {
+    const sc = await scopeOf(req.user), all = await store.all('recorridos');
+    res.json(req.user.role === 'vendedor' ? all.filter(x => x.sellerId === req.user.id) : all.filter(x => canSeeRec(sc, x)));
+  }));
+  async function cleanRec(b, old, user) {
+    const sc = await scopeOf(user), x = Object.assign({}, old);
+    x.name = str(b.name, 80); if (!x.name) fail(400, 'El recorrido necesita un nombre.');
+    x.zoneId = str(b.zoneId, 90);
+    const z = x.zoneId ? await store.get('zones', x.zoneId) : null;
+    if (!z) fail(400, 'Elegí la zona del recorrido.');
+    if (!sc.all && z.supervisorId !== user.id) fail(400, 'La zona ' + z.name + ' no es tuya.');
+    x.sellerId = str(b.sellerId, 90);
+    if (x.sellerId) {
+      const u = await store.get('users', x.sellerId);
+      if (!u || !inScope(sc, u.id)) fail(400, 'Ese vendedor no está a tu cargo.');
+      if (!u.active) fail(400, u.name + ' está inactivo.');
+    }
+    x.days = [...new Set((Array.isArray(b.days) ? b.days : []).map(Number).filter(n => Number.isInteger(n) && n >= 0 && n <= 6))].sort();
+    const ids = [...new Set((Array.isArray(b.stops) ? b.stops : []).map(v => str(v, 90)).filter(Boolean))];
+    if (ids.length > 200) fail(400, 'Demasiados comercios para un recorrido.');
+    for (const id of ids) { const c = await store.get('clients', id); if (!c || !canSeeClient(sc, c)) fail(400, 'Un comercio del recorrido no existe o no es de tu equipo.'); }
+    x.stops = ids;
+    x.updatedBy = user.name; x.updatedAt = new Date().toISOString();
+    return x;
+  }
+  // Al asignar el recorrido a un vendedor, sus comercios pasan a estar asignados a ese vendedor (así los ve y les vende).
+  async function saveRec(x) {
+    return store.tx(async s => {
+      let moved = 0;
+      if (x.sellerId) for (const id of x.stops) { const c = await s.get('clients', id); if (c && c.sellerId !== x.sellerId) { c.sellerId = x.sellerId; if (!c.zoneId) c.zoneId = x.zoneId; await s.put('clients', c); moved++; } }
+      for (const id of x.stops) { const c = await s.get('clients', id); if (c && !c.zoneId) { c.zoneId = x.zoneId; await s.put('clients', c); } } // comercio sin zona: toma la del recorrido
+      return { recorrido: await s.put('recorridos', x), assigned: moved };
+    });
+  }
+  r.post('/recorridos', needBoss, wrap(async (req, res) => { const x = await cleanRec(req.body, {}, req.user); x.id = uid('rc'); res.json(await saveRec(x)); }));
+  r.put('/recorridos/:id', needBoss, wrap(async (req, res) => {
+    const old = await store.get('recorridos', req.params.id);
+    if (!old || !canSeeRec(await scopeOf(req.user), old)) fail(404, 'Recorrido no encontrado.');
+    res.json(await saveRec(await cleanRec(req.body, old, req.user)));
+  }));
+  r.delete('/recorridos/:id', needBoss, wrap(async (req, res) => {
+    const old = await store.get('recorridos', req.params.id);
+    if (!old || !canSeeRec(await scopeOf(req.user), old)) fail(404, 'Recorrido no encontrado.');
+    await store.del('recorridos', old.id);
+    res.json({ ok: true });
   }));
 
   // ---------- visitas ----------
@@ -112,7 +185,7 @@ module.exports = function terreno(r, h) {
       id: uid('v'), date, clientId: client.id, clientName: client.name, sellerId: req.user.id, sellerName: req.user.name,
       routeId: '', checkIn: Object.assign({ ts: now, deviceTs: str(b.deviceTs, 40) }, pos || {}), saleIds: []
     };
-    const route = await store.get('routes', 'r-' + req.user.id + '-' + date);
+    const route = (await plannedRoutes(date, date)).find(x => x.sellerId === req.user.id);
     if (route && route.stops.some(s => s.clientId === client.id)) visit.routeId = route.id;
 
     // Validación GPS combinada con la ubicación del comercio

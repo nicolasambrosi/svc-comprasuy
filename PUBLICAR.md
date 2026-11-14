@@ -81,10 +81,21 @@ Siempre tiene que quedar al menos un administrador activo. Tras 8 intentos falli
 | Pantalla | Quién | Qué hace |
 |---|---|---|
 | **Hoy** | todos (inicio del vendedor) | Ruta del día, próxima visita, check-in / check-out con GPS, ficha del comercio, Vender, resultado de la visita y nota |
-| **Rutas** | supervisor, admin | Arma la ruta de cada vendedor por día (repetible semanal), ordena por cercanía, copia de otro día |
+| **Recorridos** | supervisor, admin | Recorridos fijos por zona (lista ordenada de comercios), asignados a un vendedor y a días de la semana |
+| **Rutas** | supervisor, admin | Ruta de cada vendedor por día: sale sola de sus recorridos y se puede cambiar un día puntual (repetible semanal), ordenar por cercanía, copiar de otro día |
 | **Jornada** | supervisor, admin | Programadas vs. realizadas, GPS validado, alertas, resultados, ventas, mapa del día y notas |
 | **Comisiones** | todos | Cálculo y aprobación; el vendedor solo ve su comisión cuando el supervisor la aprueba |
 
+- **Zonas y recorridos** (orden de trabajo):
+  1. Configuración → Zonas: crear las zonas (barrios o áreas) con su supervisor.
+  2. Clientes → filtro "Sin zona", tildar comercios → "Poner en zona…" (o editar el cliente → Zona).
+  3. Recorridos → Nuevo recorrido: nombre, zona, comercios en orden de visita (ordenar por cercanía, mapa),
+     vendedor y días de la semana. Al guardar, los comercios del recorrido quedan **asignados a ese vendedor**
+     (avisa antes si alguno era de otro) y los que no tenían zona toman la del recorrido.
+  4. Cada día, la ruta del vendedor es la suma de sus recorridos de ese día. En Rutas se cambia un día puntual
+     (eso manda sobre el recorrido; "Vaciar" deja ese día sin visitas).
+  El supervisor ve y maneja los comercios de las zonas que supervisa, aunque todavía no tengan vendedor.
+  La zona de un **usuario** (Usuarios → Editar) sigue indicando qué supervisor tiene a cargo a ese vendedor.
 - **GPS**: el check-in vale si el vendedor está a menos del radio (Configuración, 100 m por defecto) del comercio.
   Si está lejos o sin GPS **se registra igual** y queda marcado para el supervisor (no bloquea). Requiere HTTPS y que el
   navegador tenga permiso de ubicación. Recomendado: tablets con GPS (con chip de datos); las solo-WiFi ubican mal en la calle.
@@ -108,7 +119,7 @@ Siempre tiene que quedar al menos un administrador activo. Tras 8 intentos falli
   **Transcripción automática de los audios con IA: no está activada.** La API de Claude no recibe audio, así que haría
   falta un servicio de voz a texto aparte (cuenta, costo por minuto y clave en las variables de entorno); después Claude
   podría resumir la transcripción en campos (resultado, objeciones, competencia, próximo paso).
-- Colecciones nuevas en `svc_docs`: `zones`, `routes`, `visits`, `commissions`, `profiles`, `audios` (los audios no van
+- Colecciones nuevas en `svc_docs`: `zones`, `recorridos`, `routes`, `visits`, `commissions`, `profiles`, `audios` (los audios no van
   en el respaldo descargable). El respaldo (Configuración →
   Descargar respaldo) las incluye; "Restaurar respaldo" no las toca.
 

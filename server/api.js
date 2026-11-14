@@ -56,6 +56,15 @@ async function userExtras(b, old) {
   if (b.teamCommissionPct !== undefined) o.teamCommissionPct = pct(b.teamCommissionPct);
   return o;
 }
+// Zona de un comercio: el admin elige cualquiera; el supervisor solo las que supervisa; el vendedor no la cambia.
+async function zoneIdFor(user, v, keep) {
+  if (user.role === 'vendedor') return keep === null ? fail(403, 'Solo un supervisor o administrador puede hacer esto.') : keep;
+  const id = str(v, 90); if (!id) return '';
+  if (keep && id === keep) return keep; // dejar la zona que ya tenía
+  const z = await store.get('zones', id); if (!z) fail(400, 'La zona elegida no existe.');
+  if (user.role === 'supervisor' && z.supervisorId !== user.id) fail(400, 'La zona ' + z.name + ' no es tuya.');
+  return id;
+}
 async function sellerIdFrom(v) {
   const id = str(v, 90); if (!id) return '';
   if (!(await store.get('users', id))) fail(400, 'El vendedor elegido no existe.');
@@ -168,6 +177,7 @@ module.exports = function api() {
     if (req.user.role === 'admin') c.sellerId = await sellerIdFrom(req.body.sellerId);
     else if (req.user.role === 'supervisor') { const sid = await sellerIdFrom(req.body.sellerId); c.sellerId = sid && inScope(await scopeOf(req.user), sid) ? sid : req.user.id; }
     else c.sellerId = req.user.id;
+    c.zoneId = await zoneIdFor(req.user, req.body.zoneId, '');
     res.json(await store.put('clients', c));
   }));
   // asignar varios clientes a un vendedor (o dejarlos sin asignar con sellerId vacío)
@@ -182,6 +192,19 @@ module.exports = function api() {
     });
     res.json({ ok: true, updated: n });
   }));
+  // poner varios comercios en una zona (o sacarlos de su zona con zoneId vacío)
+  r.post('/clients/zone', needUser, wrap(async (req, res) => {
+    if (req.user.role === 'vendedor') fail(403, 'Solo un supervisor o administrador puede hacer esto.');
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.map(x => str(x, 90)) : [];
+    if (!ids.length) fail(400, 'Elegí al menos un comercio.');
+    const sc = await scopeOf(req.user), zoneId = await zoneIdFor(req.user, req.body.zoneId, null);
+    const n = await store.tx(async s => {
+      let count = 0;
+      for (const id of ids) { const c = await s.get('clients', id); if (c && canSeeClient(sc, c)) { c.zoneId = zoneId; await s.put('clients', c); count++; } }
+      return count;
+    });
+    res.json({ ok: true, updated: n });
+  }));
   r.put('/clients/:id', needUser, wrap(async (req, res) => {
     const sc = await scopeOf(req.user);
     const old = await store.get('clients', req.params.id); if (!old || !canSeeClient(sc, old)) fail(404, 'Cliente no encontrado.');
@@ -190,6 +213,7 @@ module.exports = function api() {
       const sid = await sellerIdFrom(req.body.sellerId);
       if (req.user.role === 'admin' || (sid && inScope(sc, sid))) c.sellerId = sid;
     }
+    if (req.body.zoneId !== undefined) c.zoneId = await zoneIdFor(req.user, req.body.zoneId, old.zoneId || '');
     await store.put('clients', c);
     if (c.name !== old.name) { // las ventas guardan el nombre del cliente
       for (const s of await store.all('sales')) if (s.clientId === c.id) { s.clientName = c.name; await store.put('sales', s); }
@@ -313,6 +337,7 @@ module.exports = function api() {
     await store.del('users', req.params.id);
     for (const z of await store.all('zones')) if (z.supervisorId === req.params.id) { z.supervisorId = ''; await store.put('zones', z); }
     for (const c of await store.all('clients')) if (c.sellerId === req.params.id) { c.sellerId = ''; await store.put('clients', c); } // quedan sin asignar
+    for (const x of await store.all('recorridos')) if (x.sellerId === req.params.id) { x.sellerId = ''; await store.put('recorridos', x); }
     res.json({ ok: true });
   }));
 
@@ -320,8 +345,8 @@ module.exports = function api() {
   r.get('/backup', needAdmin, wrap(async (req, res) => {
     const [products, clients, sales, settings] = await Promise.all([store.all('products'), store.all('clients'), store.all('sales'), getSettings()]);
     // terreno: se incluye para tener copia (restaurar respaldo no los toca)
-    const [zones, routes, visits, profiles, commissions] = await Promise.all(['zones', 'routes', 'visits', 'profiles', 'commissions'].map(k => store.all(k)));
-    res.json({ app: 'SVC', version: 2, exportedAt: new Date().toISOString(), settings, products, clients, sales, zones, routes, visits, profiles, commissions });
+    const [zones, routes, recorridos, visits, profiles, commissions] = await Promise.all(['zones', 'routes', 'recorridos', 'visits', 'profiles', 'commissions'].map(k => store.all(k)));
+    res.json({ app: 'SVC', version: 2, exportedAt: new Date().toISOString(), settings, products, clients, sales, zones, routes, recorridos, visits, profiles, commissions });
   }));
   r.post('/import', needAdmin, wrap(async (req, res) => {
     const b = req.body, replace = b.mode === 'replace';
