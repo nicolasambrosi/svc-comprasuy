@@ -61,12 +61,12 @@
       : '<span class="' + (cls || 'thumb') + ' noimg" aria-hidden="true">' + esc((p.name || '?').charAt(0).toUpperCase()) + '</span>';
   }
   // Achica la foto en el navegador (máx. 640 px, JPG) antes de subirla.
-  function shrinkImage(file) {
+  function shrinkImage(file, maxPx) {
     return new Promise(function (ok, bad) {
       if (!/^image\//.test(file.type)) { bad(new Error('Elegí un archivo de imagen (JPG, PNG o WEBP).')); return; }
       var url = URL.createObjectURL(file), img = new Image();
       img.onload = function () {
-        var max = 640, k = Math.min(1, max / Math.max(img.width, img.height));
+        var max = maxPx || 640, k = Math.min(1, max / Math.max(img.width, img.height));
         var c = document.createElement('canvas');
         c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
         var g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
@@ -865,7 +865,7 @@
             '<td><b>' + esc(x.c.name) + '</b><div class="small muted">' + esc(x.c.address) + '</div></td><td>' + esc(x.c.doc) + '</td><td>' + esc(x.c.phone) + '</td>' +
             (adm ? '<td>' + (sn ? esc(sn) : '<span class="muted">Sin asignar</span>') + '</td>' : '') +
             '<td class="num">' + x.s.count + '</td><td class="num">' + money(x.s.total) + '</td><td class="num">' + (x.s.debt ? '<span class="pill pendiente">' + money(x.s.debt) + '</span>' : '—') + '</td>' +
-            '<td class="act"><button class="btn sm" data-hist="' + x.c.id + '">Historial</button><button class="btn sm" data-edit="' + x.c.id + '">Editar</button>' + (adm ? '<button class="btn sm danger" data-del="' + x.c.id + '">Borrar</button>' : '') + '</td></tr>';
+            '<td class="act"><button class="btn sm" data-prof="' + x.c.id + '">Perfil</button><button class="btn sm" data-hist="' + x.c.id + '">Historial</button><button class="btn sm" data-edit="' + x.c.id + '">Editar</button>' + (adm ? '<button class="btn sm danger" data-del="' + x.c.id + '">Borrar</button>' : '') + '</td></tr>';
         }).join('') + '</tbody></table></div>' : '<div class="card empty">' + (!adm && !db.clients.length ? 'Todavía no tenés clientes asignados. Los clientes que crees quedan a tu nombre, y un administrador te puede asignar otros.' :
           'No hay clientes' + (db.clients.length ? ' con ese filtro' : ' todavía') + '.') + '</div>';
       updBulk();
@@ -891,6 +891,7 @@
     }
     $('#list', el).addEventListener('click', function (e) {
       var b = e.target.closest('button'); if (!b) return;
+      if (b.dataset.prof && window.SVC.openProfile) window.SVC.openProfile(byId(db.clients, b.dataset.prof));
       if (b.dataset.edit) {
         var c = byId(db.clients, b.dataset.edit);
         formModal('Editar cliente', clientFormFields(), c, function (o) { return act(api('PUT', '/clients/' + c.id, o), 'Cliente actualizado', draw); });
@@ -1199,7 +1200,7 @@
   window.SVC = {
     $: $, $$: $$, esc: esc, money: money, api: api, toast: toast, openModal: openModal, closeModal: closeModal, formModal: formModal, field: field,
     refresh: refresh, act: act, byId: byId, fmtDate: fmtDate, fmtDateTime: fmtDateTime, dayKey: dayKey, pad: pad, csv: csv, num: num,
-    views: views, render: render, isAdmin: isAdmin, isBoss: isBoss, showReceipt: showReceipt, ROLE_NAMES: ROLE_NAMES,
+    views: views, render: render, shrinkImage: shrinkImage, isAdmin: isAdmin, isBoss: isBoss, showReceipt: showReceipt, ROLE_NAMES: ROLE_NAMES,
     get db() { return db; },
     // Empieza una venta para un cliente (desde una visita).
     startSale: function (client) {

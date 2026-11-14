@@ -96,7 +96,13 @@ Siempre tiene que quedar al menos un administrador activo. Tras 8 intentos falli
   entregada, por fecha de cobro `paidAt`); mismo % para comercios e instituciones. El supervisor tiene su % sobre sus
   ventas y otro % sobre lo cobrado por su equipo. Los % se cargan en Usuarios → Editar. La aprobación guarda una foto
   del monto; si después cambia (p. ej. se cobra una venta), se marca "cambió desde la aprobación".
-- Colecciones nuevas en `svc_docs`: `zones`, `routes`, `visits`, `commissions`.
+- **Perfil del negocio** (botón en la ficha de la visita, en Clientes → Perfil y en Jornada): tipo de negocio, tamaño,
+  exhibición, competencia presente (las marcas que carga el equipo quedan como sugerencia), categorías de interés,
+  días y horario de atención, notas y hasta 12 fotos (fachada / góndola / otra, con la cámara de la tablet, achicadas a
+  1280 px). Cada cambio guarda la versión anterior ("Cambios anteriores"). En Jornada se ve qué visitas actualizaron perfil.
+  Un vendedor solo puede borrar las fotos que sacó él.
+- Colecciones nuevas en `svc_docs`: `zones`, `routes`, `visits`, `commissions`, `profiles`. El respaldo (Configuración →
+  Descargar respaldo) las incluye; "Restaurar respaldo" no las toca.
 
 ## 3. Probarlo en tu PC
 

@@ -124,6 +124,7 @@
       '<a class="btn sm" href="' + mapsLink(c) + '" target="_blank" rel="noopener">🧭 Cómo llegar</a></div>' +
       (debt ? '<p><span class="pill pendiente">Saldo pendiente ' + money(debt) + '</span></p>' : '') +
       (c.notes ? '<p class="small"><b>Notas:</b> ' + esc(c.notes) + '</p>' : '') +
+      '<h3>Perfil del negocio</h3><div class="prof-sum"></div>' +
       '<h3>Últimas compras</h3>' + (sales.length ? '<ul class="hist">' + sales.slice(0, 5).map(function (s) {
         return '<li><span>' + S.fmtDate(s.date) + ' · N.º ' + s.number + '</span><b>' + money(s.total) + '</b><span class="muted small">' + esc(s.items.map(function (i) { return i.qty + '× ' + i.name; }).join(', ').slice(0, 120)) + '</span></li>';
       }).join('') + '</ul>' : '<p class="muted small">Todavía no le compró nada' + (isBoss() ? '' : ' a vos') + '.</p>') +
@@ -229,6 +230,7 @@
   function bindOpenVisit(el, day, v) {
     var c = byId(db().clients, v.clientId);
     var pv = $('.prev-visits', el); if (pv && c) loadPrevVisits(pv, c, v.id);
+    if (c && S.loadProfileSummary) S.loadProfileSummary($('.prof-sum', el), c);
     $('#sell', el).addEventListener('click', function () {
       if (!c) return toast('Este cliente ya no está asignado a vos.', true);
       if (S.startSale(c)) location.hash = '#/venta';
@@ -490,7 +492,7 @@
       var times = vs.map(function (v) { return v.checkIn.ts; }).sort();
       return {
         id: uid, name: ids[uid], plan: plan, planned: plan.length, done: done, off: vs.filter(function (v) { return plan.indexOf(v.clientId) < 0; }).length, visits: vs,
-        gpsOk: vs.filter(function (v) { return v.gpsStatus === 'ok'; }).length, alerts: alerts, notes: vs.filter(function (v) { return v.note; }).length,
+        gpsOk: vs.filter(function (v) { return v.gpsStatus === 'ok'; }).length, profiles: vs.filter(function (v) { return v.profileUpdated; }).length, alerts: alerts, notes: vs.filter(function (v) { return v.note; }).length,
         sold: sold, eff: vs.length ? Math.round(sold / vs.length * 100) : null, total: my.reduce(function (a, s) { return a + s.total; }, 0), nSales: my.length,
         first: times[0], last: times[times.length - 1], open: vs.some(function (v) { return !v.checkOut; })
       };
@@ -501,13 +503,13 @@
       '<div class="card kpi accent"><span>Visitas programadas realizadas</span><b>' + sum('done') + ' de ' + sum('planned') + '</b></div>' +
       '<div class="card kpi"><span>Visitas con GPS validado</span><b>' + sum('gpsOk') + ' de ' + rows.reduce(function (a, x) { return a + x.visits.length; }, 0) + '</b><span class="muted small">' + sum('alerts') + ' con alerta</span></div>' +
       '<div class="card kpi"><span>Ventas del día</span><b>' + money(sum('total')) + '</b><span class="muted small">' + sum('nSales') + ' ventas</span></div>' +
-      '<div class="card kpi"><span>Notas de visita</span><b>' + sum('notes') + '</b></div></div>' +
-      (rows.length ? '<div class="tbl-wrap" style="margin-top:16px"><table class="jor"><thead><tr><th>Vendedor</th><th class="num">Programadas</th><th class="num">Realizadas</th><th class="num">Fuera de ruta</th><th class="num">GPS ok</th><th class="num">Alertas GPS</th><th class="num">Efectividad</th><th class="num">Ventas</th><th>Horario</th><th></th></tr></thead><tbody>' +
+      '<div class="card kpi"><span>Notas · perfiles actualizados</span><b>' + sum('notes') + ' · ' + sum('profiles') + '</b></div></div>' +
+      (rows.length ? '<div class="tbl-wrap" style="margin-top:16px"><table class="jor"><thead><tr><th>Vendedor</th><th class="num">Programadas</th><th class="num">Realizadas</th><th class="num">Fuera de ruta</th><th class="num">GPS ok</th><th class="num">Alertas GPS</th><th class="num">Efectividad</th><th class="num">Perfiles</th><th class="num">Ventas</th><th>Horario</th><th></th></tr></thead><tbody>' +
         rows.map(function (x) {
           var pct = x.planned ? Math.round(x.done / x.planned * 100) : null;
           return '<tr class="' + (x.id === jorSel.sellerId ? 'sel' : '') + '"><td><b>' + esc(x.name) + '</b>' + (x.open ? ' <span class="pill pendiente">en visita</span>' : '') + '</td><td class="num">' + x.planned + '</td>' +
             '<td class="num">' + x.done + (pct != null ? ' <span class="muted small">(' + pct + '%)</span>' : '') + '</td><td class="num">' + x.off + '</td><td class="num">' + x.gpsOk + '</td>' +
-            '<td class="num">' + (x.alerts ? '<span class="pill anulada">' + x.alerts + '</span>' : '0') + '</td><td class="num">' + (x.eff == null ? '—' : x.eff + '%') + '</td>' +
+            '<td class="num">' + (x.alerts ? '<span class="pill anulada">' + x.alerts + '</span>' : '0') + '</td><td class="num">' + (x.eff == null ? '—' : x.eff + '%') + '</td><td class="num">' + x.profiles + '</td>' +
             '<td class="num">' + money(x.total) + ' <span class="muted small">(' + x.nSales + ')</span></td><td class="small">' + (x.first ? hhmm(x.first) + '–' + hhmm(x.last) : '—') + '</td>' +
             '<td><button class="btn sm" data-det="' + x.id + '">Ver detalle</button></td></tr>';
         }).join('') + '</tbody></table></div>' : '<div class="card empty" style="margin-top:16px">No hay rutas, visitas ni ventas para ' + longDay(day) + '.</div>') +
@@ -528,7 +530,7 @@
           var mins = v.checkOut ? Math.max(1, Math.round((Date.parse(v.checkOut.ts) - Date.parse(v.checkIn.ts)) / 60000)) : null;
           var canFix = (v.gpsStatus === 'lejos' || v.gpsStatus === 'sin_referencia' || v.gpsStatus === 'baja_precision') && typeof v.checkIn.lat === 'number';
           return '<tr><td>' + (i + 1) + '</td><td class="small">' + hhmm(v.checkIn.ts) + (v.checkOut ? '–' + hhmm(v.checkOut.ts) + '<br><span class="muted">' + mins + ' min</span>' : '<br><b>en visita</b>') + '</td>' +
-            '<td><b>' + esc(v.clientName) + '</b>' + (v.routeId ? '' : ' <span class="pill">fuera de ruta</span>') + '</td>' +
+            '<td><b>' + esc(v.clientName) + '</b>' + (v.routeId ? '' : ' <span class="pill">fuera de ruta</span>') + '<div><button class="btn sm link" data-prof="' + v.clientId + '">' + (v.profileUpdated ? '✓ Perfil actualizado' : 'Ver perfil') + '</button></div></td>' +
             '<td>' + (v.checkOut ? resultPill(v.result) : '—') + (v.reason ? '<div class="small muted">' + esc(v.reason) + '</div>' : '') + (v.saleIds && v.saleIds.length ? '<div class="small">' + v.saleIds.length + ' venta(s)</div>' : '') + '</td>' +
             '<td class="small note-cell">' + esc(v.note || '') + '</td><td>' + gpsPill(v) + (v.checkIn.accuracy != null ? '<div class="small muted">±' + v.checkIn.accuracy + ' m</div>' : '') + (v.located ? '<div class="small ok-t">ubicó el comercio</div>' : '') + '</td>' +
             '<td>' + (canFix ? '<button class="btn sm" data-fix="' + v.id + '" title="Si el comercio realmente está donde hizo check-in">Usar como ubicación del comercio</button>' : '') + '</td></tr>';
@@ -539,6 +541,7 @@
       vs.forEach(function (v, i) { if (typeof v.checkIn.lat === 'number') pts.push({ lat: v.checkIn.lat, lng: v.checkIn.lng, n: i + 1, color: v.gpsStatus === 'ok' ? 'green' : 'red', label: '<b>' + (i + 1) + '. ' + esc(v.clientName) + '</b><br>' + hhmm(v.checkIn.ts) + ' · ' + esc((GPS[v.gpsStatus] || [''])[0]) }); });
       missing.forEach(function (cid) { var c = byId(db().clients, cid); if (hasGeo(c)) pts.push({ lat: c.lat, lng: c.lng, n: '', color: 'gray', label: '<b>' + esc(c.name) + '</b><br>sin visitar' }); });
       drawMap($('#jMap', det), pts, {});
+      $$('[data-prof]', det).forEach(function (b) { b.addEventListener('click', function () { var c = byId(db().clients, b.dataset.prof); if (c && S.openProfile) S.openProfile(c); else toast('Ese cliente ya no está en tu equipo', true); }); });
       $$('[data-fix]', det).forEach(function (b) {
         b.addEventListener('click', function () {
           if (!confirm('¿Guardar la ubicación de este check-in como la ubicación del comercio? Las próximas visitas se validan contra este punto.')) return;

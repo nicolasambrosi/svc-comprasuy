@@ -1,6 +1,7 @@
 // Ventas en terreno: zonas, rutas, visitas con GPS, comisiones y ubicación de clientes.
 const store = require('./store');
 const geocode = require('./geocode');
+const images = require('./images');
 const { scopeOf, inScope, canSeeClient } = require('./scope');
 const { round2 } = require('../app/app/calc.js');
 
@@ -222,6 +223,78 @@ module.exports = function terreno(r, h) {
     if (!canApprove(req.user, sc, userId)) fail(403, 'No podés cambiar esta comisión.');
     await store.del('commissions', month + '|' + userId);
     res.json({ ok: true });
+  }));
+
+  // ---------- perfil del negocio ----------
+  // Un perfil por cliente (id = id del cliente). Guarda versiones anteriores para ver qué cambió y cuándo.
+  const PROFILE_LISTS = ['businessType', 'exhibition', 'competitors', 'interests', 'days'];
+  const SIZES = ['chico', 'mediano', 'grande'];
+  const PHOTO_KINDS = ['fachada', 'gondola', 'otra'];
+  const MAX_PHOTOS = 12;
+  const strList = (v, n) => [...new Set((Array.isArray(v) ? v : []).map(x => str(x, 60)).filter(Boolean))].slice(0, n || 30);
+  async function visibleClient(req, id) {
+    const sc = await scopeOf(req.user), c = await store.get('clients', str(id, 90));
+    if (!c || !canSeeClient(sc, c)) fail(404, 'Cliente no encontrado.');
+    return c;
+  }
+  // marca la visita abierta del usuario a ese cliente (para el resumen de la jornada)
+  async function markVisit(userId, clientId) {
+    for (const v of await store.all('visits')) if (v.sellerId === userId && v.clientId === clientId && !v.checkOut) { v.profileUpdated = true; await store.put('visits', v); }
+  }
+  const emptyProfile = id => ({ id, size: '', businessType: [], exhibition: [], competitors: [], interests: [], days: [], hours: '', notes: '', photos: [], history: [] });
+
+  r.get('/profiles/:clientId', needUser, wrap(async (req, res) => {
+    const c = await visibleClient(req, req.params.clientId);
+    res.json((await store.get('profiles', c.id)) || emptyProfile(c.id));
+  }));
+  r.put('/profiles/:clientId', needUser, wrap(async (req, res) => {
+    const c = await visibleClient(req, req.params.clientId), b = req.body;
+    const p = (await store.get('profiles', c.id)) || emptyProfile(c.id);
+    const next = { size: SIZES.includes(b.size) ? b.size : '', hours: str(b.hours, 120), notes: str(b.notes, 1000) };
+    PROFILE_LISTS.forEach(k => { next[k] = strList(b[k]); });
+    const changed = Object.keys(next).filter(k => JSON.stringify(next[k]) !== JSON.stringify(p[k] == null ? (PROFILE_LISTS.includes(k) ? [] : '') : p[k]));
+    if (!changed.length) return res.json(p);
+    if (p.updatedAt) { // guarda la versión anterior (sin fotos ni historial)
+      const old = { at: p.updatedAt, by: p.updatedBy, changed };
+      changed.forEach(k => { old[k] = p[k]; });
+      p.history = [old].concat(p.history || []).slice(0, 30);
+    }
+    Object.assign(p, next, { updatedAt: new Date().toISOString(), updatedBy: req.user.name, updatedById: req.user.id });
+    await store.put('profiles', p);
+    await markVisit(req.user.id, c.id);
+    res.json(p);
+  }));
+  r.post('/profiles/:clientId/photos', needUser, wrap(async (req, res) => {
+    const c = await visibleClient(req, req.params.clientId);
+    const img = images.parseDataUrl(req.body.dataUrl);
+    if (!img) fail(400, 'La foto tiene que ser JPG, PNG o WEBP y pesar menos de 1,5 MB.');
+    const p = (await store.get('profiles', c.id)) || emptyProfile(c.id);
+    p.photos = p.photos || [];
+    if (p.photos.length >= MAX_PHOTOS) fail(400, 'Ya tiene ' + MAX_PHOTOS + ' fotos: borrá alguna antes de subir otra.');
+    const id = await images.save(null, img);
+    p.photos.unshift({ imageId: id, kind: PHOTO_KINDS.includes(req.body.kind) ? req.body.kind : 'otra', at: new Date().toISOString(), by: req.user.name, byId: req.user.id });
+    p.photosAt = new Date().toISOString();
+    await store.put('profiles', p);
+    await markVisit(req.user.id, c.id);
+    res.json(p);
+  }));
+  r.delete('/profiles/:clientId/photos/:imageId', needUser, wrap(async (req, res) => {
+    const c = await visibleClient(req, req.params.clientId);
+    const p = await store.get('profiles', c.id); if (!p) fail(404, 'Perfil no encontrado.');
+    const ph = (p.photos || []).find(x => x.imageId === req.params.imageId); if (!ph) fail(404, 'Foto no encontrada.');
+    if (req.user.role === 'vendedor' && ph.byId !== req.user.id) fail(403, 'Solo podés borrar las fotos que sacaste vos.');
+    p.photos = p.photos.filter(x => x !== ph);
+    await store.put('profiles', p);
+    await images.remove(null, ph.imageId);
+    res.json(p);
+  }));
+  // Resumen de perfiles visibles (para Clientes / Jornada): sin historial.
+  r.get('/profiles', needUser, wrap(async (req, res) => {
+    const sc = await scopeOf(req.user);
+    const ids = new Set((await store.all('clients')).filter(c => canSeeClient(sc, c)).map(c => c.id));
+    res.json((await store.all('profiles')).filter(p => ids.has(p.id)).map(p => {
+      const o = Object.assign({}, p); delete o.history; return o;
+    }));
   }));
 
   // ---------- ubicar clientes desde su dirección (admin) ----------
