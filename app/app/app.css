@@ -289,3 +289,21 @@ ul.plain{margin:6px 0;padding-left:18px}
 .prof-thumbs{display:flex;gap:6px;margin:6px 0}
 .prof-thumbs img{width:64px;height:64px;object-fit:cover;border-radius:8px}
 .btn.link{border:0;background:none;padding:2px 0;color:var(--orange-d);font-weight:600}
+
+/* ===== Notas de audio y comentarios ===== */
+.note-head{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.note-ta{width:100%;box-sizing:border-box;font:inherit;padding:10px;border:1px solid var(--g20);border-radius:10px;margin:6px 0 12px}
+.aud-box{display:grid;gap:8px;padding:12px;border:1px dashed var(--g20);border-radius:12px;margin-bottom:12px}
+.aud-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.aud{display:flex;align-items:center;gap:8px}
+.aud audio{height:36px;max-width:100%;flex:1;min-width:0}
+.note-cell .aud{margin-top:6px}
+.note-cell .aud audio{max-width:240px}
+.btn.rec{padding:14px;font-size:16px}
+.btn.rec.on,#dict.on{background:#d64545;border-color:#d64545;color:#fff}
+.feedback-card{border-color:var(--orange);background:var(--orange-l);margin-bottom:16px}
+.feedback-card h2{margin-top:0}
+.fb{padding:10px 0;border-top:1px solid rgba(0,0,0,.08)}
+.fb:first-of-type{border-top:0}
+.fb p{margin:6px 0}
+.fb-line{margin-top:6px}

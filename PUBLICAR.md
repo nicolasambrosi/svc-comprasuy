@@ -101,7 +101,15 @@ Siempre tiene que quedar al menos un administrador activo. Tras 8 intentos falli
   días y horario de atención, notas y hasta 12 fotos (fachada / góndola / otra, con la cámara de la tablet, achicadas a
   1280 px). Cada cambio guarda la versión anterior ("Cambios anteriores"). En Jornada se ve qué visitas actualizaron perfil.
   Un vendedor solo puede borrar las fotos que sacó él.
-- Colecciones nuevas en `svc_docs`: `zones`, `routes`, `visits`, `commissions`, `profiles`. El respaldo (Configuración →
+- **Notas de audio y coaching**: al cerrar la visita el vendedor puede grabar hasta 3 audios de 2 min (micrófono del
+  navegador, ~32 kbps, máx. 3 MB) y **dictar** la nota escrita (reconocimiento de voz del navegador, es-UY; en Chrome el
+  audio del dictado lo procesa el servicio de voz del navegador). En Jornada el supervisor escucha, marca la visita como
+  revisada y deja un comentario; el vendedor lo ve arriba en Hoy hasta que toca "Entendido".
+  **Transcripción automática de los audios con IA: no está activada.** La API de Claude no recibe audio, así que haría
+  falta un servicio de voz a texto aparte (cuenta, costo por minuto y clave en las variables de entorno); después Claude
+  podría resumir la transcripción en campos (resultado, objeciones, competencia, próximo paso).
+- Colecciones nuevas en `svc_docs`: `zones`, `routes`, `visits`, `commissions`, `profiles`, `audios` (los audios no van
+  en el respaldo descargable). El respaldo (Configuración →
   Descargar respaldo) las incluye; "Restaurar respaldo" no las toca.
 
 ## 3. Probarlo en tu PC

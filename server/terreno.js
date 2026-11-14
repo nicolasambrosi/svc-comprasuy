@@ -225,6 +225,66 @@ module.exports = function terreno(r, h) {
     res.json({ ok: true });
   }));
 
+  // ---------- notas de audio y coaching ----------
+  // El audio se guarda en la colección "audios" (base64, como las imágenes); la visita guarda solo la referencia.
+  const AUDIO_MAX = 3 * 1024 * 1024, AUDIO_PER_VISIT = 3;
+  function parseAudio(s) {
+    const m = /^data:(audio\/[a-z0-9.+-]+)(?:;[a-z0-9=.+-]+)*;base64,([A-Za-z0-9+/=]+)$/i.exec(String(s || ''));
+    if (!m) return null;
+    if (Buffer.byteLength(m[2], 'base64') > AUDIO_MAX) return null;
+    return { type: m[1].toLowerCase(), data: m[2] };
+  }
+  r.post('/visits/:id/audio', needUser, wrap(async (req, res) => {
+    const v = await store.get('visits', req.params.id);
+    if (!v || v.sellerId !== req.user.id) fail(404, 'Visita no encontrada.');
+    if (v.date !== today() && v.checkOut) fail(400, 'Solo se pueden agregar audios a visitas de hoy.');
+    const a = parseAudio(req.body.dataUrl); if (!a) fail(400, 'El audio no es válido o pesa más de 3 MB (máximo unos 2 minutos).');
+    v.audios = v.audios || [];
+    if (v.audios.length >= AUDIO_PER_VISIT) fail(400, 'Ya tiene ' + AUDIO_PER_VISIT + ' audios.');
+    const doc = { id: uid('a'), visitId: v.id, sellerId: v.sellerId, type: a.type, data: a.data, at: new Date().toISOString() };
+    await store.put('audios', doc);
+    v.audios.push({ id: doc.id, durationS: Math.min(Math.max(int(req.body.durationS), 0), 600), at: doc.at });
+    res.json(await store.put('visits', v));
+  }));
+  r.delete('/visits/:id/audio/:audioId', needUser, wrap(async (req, res) => {
+    const v = await store.get('visits', req.params.id);
+    if (!v || v.sellerId !== req.user.id) fail(404, 'Visita no encontrada.');
+    if (!(v.audios || []).some(x => x.id === req.params.audioId)) fail(404, 'Audio no encontrado.');
+    v.audios = v.audios.filter(x => x.id !== req.params.audioId);
+    await store.del('audios', req.params.audioId);
+    res.json(await store.put('visits', v));
+  }));
+  r.get('/audios/:id', needUser, wrap(async (req, res) => {
+    const a = await store.get('audios', req.params.id); if (!a) fail(404, 'Audio no encontrado.');
+    if (!inScope(await scopeOf(req.user), a.sellerId)) fail(404, 'Audio no encontrado.');
+    const buf = Buffer.from(a.data, 'base64');
+    res.set('Cache-Control', 'private, max-age=31536000, immutable');
+    res.set('Accept-Ranges', 'bytes');
+    // rangos: Safari los pide para reproducir audio
+    const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
+    if (m) {
+      const start = m[1] ? +m[1] : buf.length - +m[2], end = m[1] && m[2] ? Math.min(+m[2], buf.length - 1) : buf.length - 1;
+      if (start >= 0 && start <= end) { res.status(206).set('Content-Range', 'bytes ' + start + '-' + end + '/' + buf.length).type(a.type).send(buf.subarray(start, end + 1)); return; }
+    }
+    res.type(a.type).send(buf);
+  }));
+  // El supervisor marca la visita como revisada y puede dejarle un comentario al vendedor.
+  r.post('/visits/:id/review', needBoss, wrap(async (req, res) => {
+    const v = await store.get('visits', req.params.id);
+    if (!v || !inScope(await scopeOf(req.user), v.sellerId)) fail(404, 'Visita no encontrada.');
+    const text = str(req.body.comment, 1000);
+    v.reviewedBy = req.user.name; v.reviewedAt = new Date().toISOString();
+    if (text) { v.feedback = (v.feedback || []).concat([{ by: req.user.name, at: v.reviewedAt, text }]); v.feedbackSeen = false; }
+    res.json(await store.put('visits', v));
+  }));
+  // El vendedor confirma que leyó los comentarios.
+  r.post('/visits/:id/feedback-seen', needUser, wrap(async (req, res) => {
+    const v = await store.get('visits', req.params.id);
+    if (!v || v.sellerId !== req.user.id) fail(404, 'Visita no encontrada.');
+    v.feedbackSeen = true;
+    res.json(await store.put('visits', v));
+  }));
+
   // ---------- perfil del negocio ----------
   // Un perfil por cliente (id = id del cliente). Guarda versiones anteriores para ver qué cambió y cuándo.
   const PROFILE_LISTS = ['businessType', 'exhibition', 'competitors', 'interests', 'days'];

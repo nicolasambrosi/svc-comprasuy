@@ -148,9 +148,10 @@
   S.views.hoy = function (el) {
     var me = db().me, day = today();
     el.innerHTML = '<div class="head"><h1>Hoy</h1><span class="muted">' + longDay(day) + '</span></div><div class="loading">Cargando tu ruta…</div>';
-    Promise.all([api('GET', '/routes?date=' + day), api('GET', '/visits?from=' + day + '&sellerId=' + me.id)]).then(function (r) {
+    Promise.all([api('GET', '/routes?date=' + day), api('GET', '/visits?from=' + addDays(day, -14) + '&to=' + day + '&sellerId=' + me.id)]).then(function (r) {
       hoyState.routes = r[0].filter(function (x) { return x.sellerId === me.id; });
-      hoyState.visits = r[1];
+      hoyState.visits = r[1].filter(function (v) { return v.date === day; });
+      hoyState.feedback = r[1].filter(function (v) { return (v.feedback || []).length && !v.feedbackSeen; });
       if (alive(el, 'hoy')) drawHoy(el, day);
     }, function (e) { el.innerHTML = '<div class="card empty">' + esc(e.message) + '</div>'; });
     if (!lastPos || Date.now() - lastPos.at > 120000) getPos().then(function (p) { if (p && alive(el, 'hoy') && !$('.visit-open', el)) drawHoy(el, day); });
@@ -171,6 +172,7 @@
 
     el.innerHTML = '<div class="head"><div><h1>Hoy</h1><span class="muted">' + longDay(day) + (route ? ' · ruta armada por ' + esc(route.updatedBy) : '') + '</span></div>' +
       '<div class="actions"><button class="btn" id="offRoute">+ Visita fuera de ruta</button><button class="btn" id="showMap">🗺️ Mapa</button></div></div>' +
+      feedbackHtml() +
       '<div class="grid kpis hoy-kpis">' +
       '<div class="card kpi accent"><span>Visitas de la ruta</span><b>' + done + ' de ' + stops.length + '</b><div class="bar"><i style="width:' + pct + '%"></i></div></div>' +
       '<div class="card kpi"><span>Fuera de ruta</span><b>' + offRoute.length + '</b></div>' +
@@ -197,6 +199,14 @@
       '</div>';
 
     $('#offRoute', el).addEventListener('click', function () { pickClient(function (c) { checkIn(el, day, c); }); });
+    $$('[data-seen]', el).forEach(function (b) {
+      b.addEventListener('click', function () {
+        b.disabled = true;
+        api('POST', '/visits/' + b.dataset.seen + '/feedback-seen', {}).then(function () {
+          hoyState.feedback = hoyState.feedback.filter(function (v) { return v.id !== b.dataset.seen; }); drawHoy(el, day);
+        }, function (e) { toast(e.message, true); b.disabled = false; });
+      });
+    });
     $('#locate', el).addEventListener('click', function () { var b = this; b.disabled = true; getPos().then(function (p) { if (!p) toast('No se pudo obtener la ubicación. Revisá que el GPS esté activado y que el navegador tenga permiso.', true); drawHoy(el, day); }); });
     $('#showMap', el).addEventListener('click', function () {
       var box = $('#hoyMap', el); box.hidden = !box.hidden; if (box.hidden) return;
@@ -209,6 +219,15 @@
     if (open) bindOpenVisit(el, day, open);
   }
 
+  function feedbackHtml() {
+    var list = hoyState.feedback || [];
+    if (!list.length) return '';
+    return '<div class="card feedback-card"><h2>💬 Comentarios de tu supervisor</h2>' + list.map(function (v) {
+      return '<div class="fb"><div class="small muted">Visita a <b>' + esc(v.clientName) + '</b> · ' + longDay(v.date) + '</div>' +
+        v.feedback.map(function (f) { return '<p><b>' + esc(f.by) + ':</b> ' + esc(f.text) + '</p>'; }).join('') +
+        '<button class="btn sm" data-seen="' + v.id + '">Entendido</button></div>';
+    }).join('') + '</div>';
+  }
   function nextHtml(c) {
     if (!c) return '<div class="card empty">' + (hoyState.routes[0] ? '¡Terminaste la ruta de hoy! 🎉' : 'Elegí un comercio para hacer check-in.') + '</div>';
     var d = lastPos && hasGeo(c) ? fmtDist(distanceM(lastPos, c)) : '';
@@ -262,7 +281,9 @@
     var html = '<div class="checkout"><p class="muted">¿Cómo terminó la visita a <b>' + esc(v.clientName) + '</b>?</p>' +
       '<div class="res-grid">' + RESULTS.map(function (r) { return '<button type="button" class="res' + (r.v === sel ? ' on' : '') + '" data-r="' + r.v + '">' + esc(r.t) + '</button>'; }).join('') + '</div>' +
       '<div id="whyBox" hidden><p class="small"><b>¿Por qué no compró?</b></p><div class="chips">' + REASONS.map(function (x) { return '<button type="button" class="chip" data-why="' + esc(x) + '">' + esc(x) + '</button>'; }).join('') + '</div></div>' +
-      '<label class="f full">Nota de la visita (opcional)<textarea id="vNote" rows="3" placeholder="Qué se habló, qué pidió, cuándo volver…"></textarea></label>' +
+      '<div class="note-head"><b>Nota de la visita (opcional)</b><button type="button" class="btn sm" id="dict">🎤 Dictar</button></div>' +
+      '<textarea id="vNote" class="note-ta" rows="3" placeholder="Qué se habló, qué pidió, cuándo volver…"></textarea>' +
+      '<div class="aud-box" id="audBox"></div>' +
       '<div class="foot"><button class="btn" data-close>Volver</button><button class="btn primary" id="vSave"' + (sel ? '' : ' disabled') + '>Cerrar visita</button></div></div>';
     S.openModal('Terminar visita', html, function (m) {
       function upd() {
@@ -277,7 +298,10 @@
         if (w) { reason = reason === w.dataset.why ? '' : w.dataset.why; upd(); }
       });
       upd();
+      var recCtl = S.bindAudioRecorder ? S.bindAudioRecorder($('#audBox', m), v) : null;
+      if (S.bindDictation) S.bindDictation($('#dict', m), $('#vNote', m));
       $('#vSave', m).addEventListener('click', function () {
+        if (recCtl && recCtl.busy()) { toast('Primero detené la grabación', true); return; }
         var b = this; b.disabled = true; b.textContent = 'Guardando…';
         var note = $('#vNote', m).value;
         // la posición de salida es informativa: si tarda, se cierra sin ella
@@ -492,7 +516,7 @@
       var times = vs.map(function (v) { return v.checkIn.ts; }).sort();
       return {
         id: uid, name: ids[uid], plan: plan, planned: plan.length, done: done, off: vs.filter(function (v) { return plan.indexOf(v.clientId) < 0; }).length, visits: vs,
-        gpsOk: vs.filter(function (v) { return v.gpsStatus === 'ok'; }).length, profiles: vs.filter(function (v) { return v.profileUpdated; }).length, alerts: alerts, notes: vs.filter(function (v) { return v.note; }).length,
+        gpsOk: vs.filter(function (v) { return v.gpsStatus === 'ok'; }).length, profiles: vs.filter(function (v) { return v.profileUpdated; }).length, audios: vs.reduce(function (a, v) { return a + (v.audios || []).length; }, 0), toReview: vs.filter(function (v) { return ((v.audios || []).length || v.note) && !v.reviewedAt; }).length, alerts: alerts, notes: vs.filter(function (v) { return v.note; }).length,
         sold: sold, eff: vs.length ? Math.round(sold / vs.length * 100) : null, total: my.reduce(function (a, s) { return a + s.total; }, 0), nSales: my.length,
         first: times[0], last: times[times.length - 1], open: vs.some(function (v) { return !v.checkOut; })
       };
@@ -503,13 +527,13 @@
       '<div class="card kpi accent"><span>Visitas programadas realizadas</span><b>' + sum('done') + ' de ' + sum('planned') + '</b></div>' +
       '<div class="card kpi"><span>Visitas con GPS validado</span><b>' + sum('gpsOk') + ' de ' + rows.reduce(function (a, x) { return a + x.visits.length; }, 0) + '</b><span class="muted small">' + sum('alerts') + ' con alerta</span></div>' +
       '<div class="card kpi"><span>Ventas del día</span><b>' + money(sum('total')) + '</b><span class="muted small">' + sum('nSales') + ' ventas</span></div>' +
-      '<div class="card kpi"><span>Notas · perfiles actualizados</span><b>' + sum('notes') + ' · ' + sum('profiles') + '</b></div></div>' +
-      (rows.length ? '<div class="tbl-wrap" style="margin-top:16px"><table class="jor"><thead><tr><th>Vendedor</th><th class="num">Programadas</th><th class="num">Realizadas</th><th class="num">Fuera de ruta</th><th class="num">GPS ok</th><th class="num">Alertas GPS</th><th class="num">Efectividad</th><th class="num">Perfiles</th><th class="num">Ventas</th><th>Horario</th><th></th></tr></thead><tbody>' +
+      '<div class="card kpi"><span>Audios · notas · perfiles</span><b>' + sum('audios') + ' · ' + sum('notes') + ' · ' + sum('profiles') + '</b><span class="muted small">' + sum('toReview') + ' visitas con nota o audio sin revisar</span></div></div>' +
+      (rows.length ? '<div class="tbl-wrap" style="margin-top:16px"><table class="jor"><thead><tr><th>Vendedor</th><th class="num">Programadas</th><th class="num">Realizadas</th><th class="num">Fuera de ruta</th><th class="num">GPS ok</th><th class="num">Alertas GPS</th><th class="num">Efectividad</th><th class="num">Perfiles</th><th class="num">Audios</th><th class="num">Ventas</th><th>Horario</th><th></th></tr></thead><tbody>' +
         rows.map(function (x) {
           var pct = x.planned ? Math.round(x.done / x.planned * 100) : null;
           return '<tr class="' + (x.id === jorSel.sellerId ? 'sel' : '') + '"><td><b>' + esc(x.name) + '</b>' + (x.open ? ' <span class="pill pendiente">en visita</span>' : '') + '</td><td class="num">' + x.planned + '</td>' +
             '<td class="num">' + x.done + (pct != null ? ' <span class="muted small">(' + pct + '%)</span>' : '') + '</td><td class="num">' + x.off + '</td><td class="num">' + x.gpsOk + '</td>' +
-            '<td class="num">' + (x.alerts ? '<span class="pill anulada">' + x.alerts + '</span>' : '0') + '</td><td class="num">' + (x.eff == null ? '—' : x.eff + '%') + '</td><td class="num">' + x.profiles + '</td>' +
+            '<td class="num">' + (x.alerts ? '<span class="pill anulada">' + x.alerts + '</span>' : '0') + '</td><td class="num">' + (x.eff == null ? '—' : x.eff + '%') + '</td><td class="num">' + x.profiles + '</td><td class="num">' + (x.audios ? x.audios + (x.toReview ? ' <span class="pill pendiente">' + x.toReview + ' sin revisar</span>' : '') : '0') + '</td>' +
             '<td class="num">' + money(x.total) + ' <span class="muted small">(' + x.nSales + ')</span></td><td class="small">' + (x.first ? hhmm(x.first) + '–' + hhmm(x.last) : '—') + '</td>' +
             '<td><button class="btn sm" data-det="' + x.id + '">Ver detalle</button></td></tr>';
         }).join('') + '</tbody></table></div>' : '<div class="card empty" style="margin-top:16px">No hay rutas, visitas ni ventas para ' + longDay(day) + '.</div>') +
@@ -526,13 +550,15 @@
       det.innerHTML = '<div class="card" style="margin-top:16px"><h2>' + esc(x.name) + ' · ' + longDay(day) + '</h2>' +
         '<div class="map-box" id="jMap"></div>' +
         '<p class="small muted"><span class="dot green"></span> GPS ok <span class="dot red"></span> alerta GPS <span class="dot gray"></span> programada sin visitar · El número es el orden de la visita.</p>' +
-        (vs.length ? '<div class="tbl-wrap"><table><thead><tr><th>#</th><th>Hora</th><th>Comercio</th><th>Resultado</th><th>Nota</th><th>GPS</th><th></th></tr></thead><tbody>' + vs.map(function (v, i) {
+        (vs.length ? '<div class="tbl-wrap"><table><thead><tr><th>#</th><th>Hora</th><th>Comercio</th><th>Resultado</th><th>Nota y audios</th><th>GPS</th><th></th></tr></thead><tbody>' + vs.map(function (v, i) {
           var mins = v.checkOut ? Math.max(1, Math.round((Date.parse(v.checkOut.ts) - Date.parse(v.checkIn.ts)) / 60000)) : null;
           var canFix = (v.gpsStatus === 'lejos' || v.gpsStatus === 'sin_referencia' || v.gpsStatus === 'baja_precision') && typeof v.checkIn.lat === 'number';
           return '<tr><td>' + (i + 1) + '</td><td class="small">' + hhmm(v.checkIn.ts) + (v.checkOut ? '–' + hhmm(v.checkOut.ts) + '<br><span class="muted">' + mins + ' min</span>' : '<br><b>en visita</b>') + '</td>' +
             '<td><b>' + esc(v.clientName) + '</b>' + (v.routeId ? '' : ' <span class="pill">fuera de ruta</span>') + '<div><button class="btn sm link" data-prof="' + v.clientId + '">' + (v.profileUpdated ? '✓ Perfil actualizado' : 'Ver perfil') + '</button></div></td>' +
             '<td>' + (v.checkOut ? resultPill(v.result) : '—') + (v.reason ? '<div class="small muted">' + esc(v.reason) + '</div>' : '') + (v.saleIds && v.saleIds.length ? '<div class="small">' + v.saleIds.length + ' venta(s)</div>' : '') + '</td>' +
-            '<td class="small note-cell">' + esc(v.note || '') + '</td><td>' + gpsPill(v) + (v.checkIn.accuracy != null ? '<div class="small muted">±' + v.checkIn.accuracy + ' m</div>' : '') + (v.located ? '<div class="small ok-t">ubicó el comercio</div>' : '') + '</td>' +
+            '<td class="small note-cell">' + esc(v.note || '') + (S.audioPlayers ? S.audioPlayers(v) : '') +
+            (v.feedback || []).map(function (f) { return '<div class="fb-line">💬 <b>' + esc(f.by) + ':</b> ' + esc(f.text) + (v.feedbackSeen ? ' <span class="ok-t">· leído</span>' : '') + '</div>'; }).join('') +
+            ((v.note || (v.audios || []).length) ? '<div>' + (v.reviewedAt ? '<span class="pill pagada">revisada · ' + esc(v.reviewedBy) + '</span> ' : '') + '<button class="btn sm' + (v.reviewedAt ? '' : ' primary') + '" data-rev="' + v.id + '">' + (v.reviewedAt ? 'Comentar' : 'Marcar revisada / comentar') + '</button></div>' : '') + '</td><td>' + gpsPill(v) + (v.checkIn.accuracy != null ? '<div class="small muted">±' + v.checkIn.accuracy + ' m</div>' : '') + (v.located ? '<div class="small ok-t">ubicó el comercio</div>' : '') + '</td>' +
             '<td>' + (canFix ? '<button class="btn sm" data-fix="' + v.id + '" title="Si el comercio realmente está donde hizo check-in">Usar como ubicación del comercio</button>' : '') + '</td></tr>';
         }).join('') + '</tbody></table></div>' : '<p class="muted">No registró visitas.</p>') +
         (missing.length ? '<h3>Programadas sin visitar (' + missing.length + ')</h3><ul class="plain">' + missing.map(function (cid) { var c = byId(db().clients, cid); return '<li>' + esc(c ? c.name : cid) + (c && c.address ? ' <span class="muted small">' + esc(c.address) + '</span>' : '') + '</li>'; }).join('') + '</ul>' : '') +
@@ -541,6 +567,14 @@
       vs.forEach(function (v, i) { if (typeof v.checkIn.lat === 'number') pts.push({ lat: v.checkIn.lat, lng: v.checkIn.lng, n: i + 1, color: v.gpsStatus === 'ok' ? 'green' : 'red', label: '<b>' + (i + 1) + '. ' + esc(v.clientName) + '</b><br>' + hhmm(v.checkIn.ts) + ' · ' + esc((GPS[v.gpsStatus] || [''])[0]) }); });
       missing.forEach(function (cid) { var c = byId(db().clients, cid); if (hasGeo(c)) pts.push({ lat: c.lat, lng: c.lng, n: '', color: 'gray', label: '<b>' + esc(c.name) + '</b><br>sin visitar' }); });
       drawMap($('#jMap', det), pts, {});
+      $$('[data-rev]', det).forEach(function (b) {
+        b.addEventListener('click', function () {
+          var v = vs.filter(function (x) { return x.id === b.dataset.rev; })[0];
+          S.formModal('Revisar visita a ' + v.clientName, [{ name: 'comment', label: 'Comentario para ' + x.name + ' (opcional: lo ve en su pantalla Hoy)', type: 'textarea', full: true }], {}, function (o) {
+            return api('POST', '/visits/' + v.id + '/review', { comment: o.comment }).then(function () { toast(o.comment ? 'Comentario enviado' : 'Visita marcada como revisada'); reload(); }, function (e) { toast(e.message, true); throw e; });
+          });
+        });
+      });
       $$('[data-prof]', det).forEach(function (b) { b.addEventListener('click', function () { var c = byId(db().clients, b.dataset.prof); if (c && S.openProfile) S.openProfile(c); else toast('Ese cliente ya no está en tu equipo', true); }); });
       $$('[data-fix]', det).forEach(function (b) {
         b.addEventListener('click', function () {
