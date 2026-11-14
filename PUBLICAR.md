@@ -70,7 +70,33 @@ Cada cliente tiene un **vendedor asignado** (campo `sellerId` en la base). El cl
 los que crea un administrador quedan sin asignar salvo que elija uno. Los clientes sin asignar solo los ven los administradores.
 Si se borra un usuario, sus clientes quedan sin asignar.
 
+**Supervisor** (rol nuevo): vende como un vendedor y además ve los clientes, ventas, rutas y visitas de los usuarios de
+**sus zonas**, les arma las rutas y les aprueba la comisión. Las zonas se crean en Configuración → Zonas (cada una con su
+supervisor) y la zona de cada vendedor se elige en Usuarios → Editar.
+
 Siempre tiene que quedar al menos un administrador activo. Tras 8 intentos fallidos de clave, ese email queda bloqueado 15 minutos.
+
+## 2b. Ventas en terreno (web, pensado para tablet)
+
+| Pantalla | Quién | Qué hace |
+|---|---|---|
+| **Hoy** | todos (inicio del vendedor) | Ruta del día, próxima visita, check-in / check-out con GPS, ficha del comercio, Vender, resultado de la visita y nota |
+| **Rutas** | supervisor, admin | Arma la ruta de cada vendedor por día (repetible semanal), ordena por cercanía, copia de otro día |
+| **Jornada** | supervisor, admin | Programadas vs. realizadas, GPS validado, alertas, resultados, ventas, mapa del día y notas |
+| **Comisiones** | todos | Cálculo y aprobación; el vendedor solo ve su comisión cuando el supervisor la aprueba |
+
+- **GPS**: el check-in vale si el vendedor está a menos del radio (Configuración, 100 m por defecto) del comercio.
+  Si está lejos o sin GPS **se registra igual** y queda marcado para el supervisor (no bloquea). Requiere HTTPS y que el
+  navegador tenga permiso de ubicación. Recomendado: tablets con GPS (con chip de datos); las solo-WiFi ubican mal en la calle.
+- **Ubicación de los comercios** (combinada): Configuración → "Ubicar clientes desde su dirección" los ubica de forma
+  aproximada con OpenStreetMap (solo acepta resultados a nivel calle/edificio). En la **primera visita** con buen GPS
+  (±50 m) y a menos de 1 km, la ubicación se corrige con la del vendedor. Un comercio sin ubicar se ubica en su primer
+  check-in. En Jornada el supervisor puede usar un check-in como ubicación del comercio.
+- **Comisiones**: % sobre el **neto** (sin IVA, con descuento) de las ventas **cobradas** en el mes (estado pagada o
+  entregada, por fecha de cobro `paidAt`); mismo % para comercios e instituciones. El supervisor tiene su % sobre sus
+  ventas y otro % sobre lo cobrado por su equipo. Los % se cargan en Usuarios → Editar. La aprobación guarda una foto
+  del monto; si después cambia (p. ej. se cobra una venta), se marca "cambió desde la aprobación".
+- Colecciones nuevas en `svc_docs`: `zones`, `routes`, `visits`, `commissions`.
 
 ## 3. Probarlo en tu PC
 

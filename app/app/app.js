@@ -25,7 +25,7 @@
   var STATUSES = ['pagada', 'pendiente', 'entregada', 'anulada'];
   var PAYMENTS = ['Efectivo', 'Débito', 'Crédito', 'Transferencia', 'Cuenta corriente'];
   var IVA_RATES = [{ v: 22, t: '22% (básica)' }, { v: 10, t: '10% (mínima)' }, { v: 0, t: 'Exento' }];
-  var ROLE_NAMES = { admin: 'Administrador', vendedor: 'Vendedor' };
+  var ROLE_NAMES = { admin: 'Administrador', supervisor: 'Supervisor', vendedor: 'Vendedor' };
 
   // ---------- servidor ----------
   function api(method, url, body) {
@@ -46,6 +46,7 @@
     return api('GET', '/data').then(function (d) { db = d; return d; });
   }
   var isAdmin = function () { return db.me && db.me.role === 'admin'; };
+  var isBoss = function () { return db.me && (db.me.role === 'admin' || db.me.role === 'supervisor'); };
   // Ejecuta una escritura, recarga los datos y vuelve a dibujar.
   function act(promise, okMsg, after) {
     return promise.then(function (res) {
@@ -412,6 +413,7 @@
           toast('Venta N.º ' + sale.number + ' guardada' + (withReceipt ? '' : ' · la ves en Ventas'));
           if (withReceipt) showReceipt(sale);
           else window.scrollTo(0, 0);
+          if (window.SVC.afterSale) window.SVC.afterSale(sale, withReceipt);
         });
       }).catch(function (e) {
         toast(e.message, true);
@@ -432,12 +434,12 @@
     if (!list.length) return '<div class="empty">Todavía no hay ventas.</div>';
     var opts = STATUSES.filter(function (x) { return x !== 'anulada' || isAdmin(); });
     return '<div class="tbl-wrap"><table><thead><tr><th>N.º</th><th>Fecha</th><th>Cliente</th>' + (compact ? '' : '<th>Pago</th>') +
-      (compact || !isAdmin() ? '' : '<th>Vendedor</th>') +
+      (compact || !isBoss() ? '' : '<th>Vendedor</th>') +
       '<th>Estado</th><th class="num">Total</th><th></th></tr></thead><tbody>' +
       list.map(function (s) {
         return '<tr><td>' + s.number + '</td><td>' + fmtDateTime(s.date) + '</td><td>' + esc(s.clientName) + '</td>' +
           (compact ? '' : '<td>' + esc(s.payment) + '</td>') +
-          (compact || !isAdmin() ? '' : '<td>' + esc(s.userName || '—') + '</td>') +
+          (compact || !isBoss() ? '' : '<td>' + esc(s.userName || '—') + '</td>') +
           '<td>' + (compact || s.status === 'anulada' ? '<span class="pill ' + s.status + '">' + s.status + '</span>' :
             '<select data-status="' + s.id + '">' + opts.map(function (x) { return '<option' + (x === s.status ? ' selected' : '') + '>' + x + '</option>'; }).join('') + '</select>') + '</td>' +
           '<td class="num"><b>' + money(s.total) + '</b></td><td class="act"><button class="btn sm" data-view="' + s.id + '">Ver</button></td></tr>';
@@ -975,12 +977,15 @@
     return [
       { name: 'name', label: 'Nombre', req: true, full: true },
       { name: 'email', label: 'Email (para entrar)', type: 'email', req: true, auto: 'off' },
-      { name: 'role', label: 'Rol', type: 'select', options: [{ v: 'vendedor', t: 'Vendedor' }, { v: 'admin', t: 'Administrador' }], def: 'vendedor' },
+      { name: 'role', label: 'Rol', type: 'select', options: [{ v: 'vendedor', t: 'Vendedor' }, { v: 'supervisor', t: 'Supervisor (vende y supervisa sus zonas)' }, { v: 'admin', t: 'Administrador' }], def: 'vendedor' },
+      { name: 'zoneId', label: 'Zona (para vendedores)', type: 'select', options: [{ v: '', t: 'Sin zona' }].concat((db.zones || []).map(function (z) { return { v: z.id, t: z.name }; })), def: '' },
+      { name: 'commissionPct', label: 'Comisión sobre sus ventas cobradas (%)', type: 'number', def: 0 },
+      { name: 'teamCommissionPct', label: 'Comisión sobre su equipo (% · solo supervisores)', type: 'number', def: 0 },
       { name: 'password', label: isNew ? 'Contraseña (mín. 8 caracteres)' : 'Nueva contraseña (dejá vacío para no cambiarla)', type: 'password', req: isNew, auto: 'new-password' },
       { name: 'active', label: 'Estado', type: 'select', options: [{ v: '1', t: 'Activo' }, { v: '0', t: 'Inactivo (no puede entrar)' }], def: '1' }
     ];
   };
-  function userBody(o) { return { name: o.name, email: o.email, role: o.role, password: o.password || undefined, active: o.active !== '0' }; }
+  function userBody(o) { return { name: o.name, email: o.email, role: o.role, password: o.password || undefined, active: o.active !== '0', zoneId: o.zoneId, commissionPct: o.commissionPct, teamCommissionPct: o.teamCommissionPct }; }
 
   function passwordCard() {
     return '<div class="card"><h2>Mi contraseña</h2><p class="muted small">Entraste como <b>' + esc(db.me.email) + '</b> (' + ROLE_NAMES[db.me.role] + ').</p>' +
@@ -1022,12 +1027,14 @@
     }
     var st = db.settings;
     el.innerHTML = '<div class="head"><h1>Configuración</h1></div>' +
+      '<div id="terrenoCfg"></div>' +
       '<div class="card" style="margin-bottom:16px"><div class="head" style="margin-bottom:10px"><h2 style="margin:0">Usuarios</h2><button class="btn primary" id="addUser">+ Nuevo usuario</button></div>' +
-      '<p class="muted small">Los <b>administradores</b> ven y manejan todo. Los <b>vendedores</b> registran ventas y clientes y solo ven sus propias ventas y los clientes asignados a ellos (se asignan en Clientes).</p>' +
-      '<div class="tbl-wrap"><table><thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Estado</th><th class="num">Clientes</th><th class="num">Ventas</th><th></th></tr></thead><tbody>' +
+      '<p class="muted small">Los <b>administradores</b> ven y manejan todo. Los <b>supervisores</b> venden y además ven, arman rutas y aprueban comisiones de los vendedores de sus zonas. Los <b>vendedores</b> solo ven sus ventas y los clientes asignados a ellos (se asignan en Clientes).</p>' +
+      '<div class="tbl-wrap"><table><thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Zona</th><th class="num">Comisión</th><th>Estado</th><th class="num">Clientes</th><th class="num">Ventas</th><th></th></tr></thead><tbody>' +
       db.users.slice().sort(function (a, b) { return a.name.localeCompare(b.name); }).map(function (u) {
         var n = db.sales.filter(function (s) { return s.userId === u.id && s.status !== 'anulada'; }).length;
         return '<tr><td><b>' + esc(u.name) + '</b>' + (u.id === db.me.id ? ' <span class="pill">vos</span>' : '') + '</td><td>' + esc(u.email) + '</td><td>' + ROLE_NAMES[u.role] + '</td>' +
+          '<td>' + esc((byId(db.zones || [], u.zoneId) || {}).name || '—') + '</td><td class="num">' + (u.commissionPct || 0) + '%' + (u.role === 'supervisor' ? ' + ' + (u.teamCommissionPct || 0) + '% equipo' : '') + '</td>' +
           '<td>' + (u.active ? '<span class="pill pagada">activo</span>' : '<span class="pill anulada">inactivo</span>') + '</td><td class="num">' + db.clients.filter(function (c) { return c.sellerId === u.id; }).length + '</td><td class="num">' + n + '</td>' +
           '<td class="act"><button class="btn sm" data-uedit="' + u.id + '">Editar</button>' + (u.id === db.me.id ? '' : '<button class="btn sm danger" data-udel="' + u.id + '">Borrar</button>') + '</td></tr>';
       }).join('') + '</tbody></table></div></div>' +
@@ -1038,6 +1045,7 @@
       field({ name: 'address', label: 'Dirección', full: true }, st.address) +
       field({ name: 'nextNumber', label: 'Próximo N.º de venta', type: 'number', step: 1, min: 1 }, st.nextNumber) +
       field({ name: 'lowStockDefault', label: 'Stock mínimo por defecto', type: 'number', step: 1 }, st.lowStockDefault) +
+      field({ name: 'gpsRadius', label: 'Radio de validación GPS (metros)', type: 'number', step: 1, min: 20 }, st.gpsRadius || 100) +
       '<div class="full"><button class="btn primary">Guardar</button></div></form></div>' +
       '<div style="display:grid;gap:16px;align-content:start">' + passwordCard() + printCard() +
       '<div class="card"><h2>Respaldo de datos</h2><p class="muted small">Los datos se guardan en la base de datos del servidor. Igual conviene descargar un respaldo cada tanto.</p>' +
@@ -1053,7 +1061,7 @@
     $$('[data-uedit]', el).forEach(function (b) {
       b.addEventListener('click', function () {
         var u = byId(db.users, b.dataset.uedit);
-        formModal('Editar usuario', userFields(false), { name: u.name, email: u.email, role: u.role, active: u.active ? '1' : '0' },
+        formModal('Editar usuario', userFields(false), { name: u.name, email: u.email, role: u.role, active: u.active ? '1' : '0', zoneId: u.zoneId || '', commissionPct: u.commissionPct || 0, teamCommissionPct: u.teamCommissionPct || 0 },
           function (o) { return act(api('PUT', '/users/' + u.id, userBody(o)), 'Usuario actualizado'); });
       });
     });
@@ -1066,9 +1074,10 @@
     $('#cfg', el).addEventListener('submit', function (e) {
       e.preventDefault();
       var f = this.elements;
-      act(api('PUT', '/settings', { company: f.company.value, rut: f.rut.value, phone: f.phone.value, address: f.address.value, nextNumber: f.nextNumber.value, lowStockDefault: f.lowStockDefault.value }), 'Configuración guardada');
+      act(api('PUT', '/settings', { company: f.company.value, rut: f.rut.value, phone: f.phone.value, address: f.address.value, nextNumber: f.nextNumber.value, lowStockDefault: f.lowStockDefault.value, gpsRadius: f.gpsRadius.value }), 'Configuración guardada');
     });
     bindPasswordCard(el); bindPrintCard(el);
+    if (window.SVC.configExtra) window.SVC.configExtra($('#terrenoCfg', el));
     $('#bk', el).addEventListener('click', function () {
       api('GET', '/backup').then(function (data) {
         download('svc-respaldo-' + dayKey(new Date()) + '.json', JSON.stringify(data, null, 2), 'application/json');
@@ -1149,6 +1158,7 @@
   });
 
   function drawWho() {
+    $$('.side a.nav[data-roles]').forEach(function (a) { a.hidden = a.dataset.roles.split(',').indexOf(db.me.role) < 0; });
     $('#who').innerHTML = '<b>' + esc(db.me.name) + '</b><span class="em">' + esc(db.me.email) + '</span><br><span class="role">' + ROLE_NAMES[db.me.role] + '</span><br><button id="logout">Salir</button>';
     $('#logout').addEventListener('click', function () {
       api('POST', '/logout', {}).catch(function () {}).then(function () { cart.items = []; showLogin(); });
@@ -1157,7 +1167,7 @@
 
   function render() {
     if (!db.me) return;
-    var name = (location.hash.replace(/^#\/?/, '') || 'panel').split('?')[0];
+    var name = (location.hash.replace(/^#\/?/, '') || (db.me.role === 'vendedor' ? 'hoy' : 'panel')).split('?')[0];
     if (!views[name]) name = 'panel';
     $$('.side a.nav').forEach(function (a) { a.classList.toggle('on', a.getAttribute('href') === '#/' + name); });
     var el = $('#view');
@@ -1184,6 +1194,21 @@
   document.addEventListener('visibilitychange', function () {
     if (!document.hidden && db.me && !$('#modal-root').innerHTML && $('#view').dataset.view !== 'venta') refresh().then(render).catch(function () {});
   });
+
+  // Funciones compartidas con terreno.js (rutas, visitas, jornada y comisiones).
+  window.SVC = {
+    $: $, $$: $$, esc: esc, money: money, api: api, toast: toast, openModal: openModal, closeModal: closeModal, formModal: formModal, field: field,
+    refresh: refresh, act: act, byId: byId, fmtDate: fmtDate, fmtDateTime: fmtDateTime, dayKey: dayKey, pad: pad, csv: csv, num: num,
+    views: views, render: render, isAdmin: isAdmin, isBoss: isBoss, showReceipt: showReceipt, ROLE_NAMES: ROLE_NAMES,
+    get db() { return db; },
+    // Empieza una venta para un cliente (desde una visita).
+    startSale: function (client) {
+      if (cart.items.length && cart.clientId !== client.id && !confirm('El carrito tiene productos de otra venta. ¿Vaciarlo?')) return false;
+      if (cart.clientId !== client.id) cart = newCart();
+      cart.clientId = client.id; cart.address = client.address || ''; cart.phone = client.phone || '';
+      return true;
+    }
+  };
 
   $('#view').innerHTML = '<div class="loading">Cargando…</div>';
   start().catch(function (e) {

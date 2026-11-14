@@ -6,7 +6,7 @@ const store = require('./store');
 const scrypt = promisify(crypto.scrypt);
 const COOKIE = 'svc_session';
 const SESSION_DAYS = 14;
-const ROLES = ['admin', 'vendedor'];
+const ROLES = ['admin', 'supervisor', 'vendedor'];
 
 async function hashPassword(pw) {
   const salt = crypto.randomBytes(16);
@@ -27,7 +27,10 @@ function passwordError(pw) {
 }
 const normEmail = e => (typeof e === 'string' ? e.trim().toLowerCase() : '');
 const validEmail = e => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e);
-const publicUser = u => u && ({ id: u.id, name: u.name, email: u.email, role: u.role, active: u.active !== false, createdAt: u.createdAt });
+const publicUser = u => u && ({
+  id: u.id, name: u.name, email: u.email, role: u.role, active: u.active !== false, createdAt: u.createdAt,
+  zoneId: u.zoneId || '', commissionPct: u.commissionPct || 0, teamCommissionPct: u.teamCommissionPct || 0
+});
 
 async function findByEmail(email) {
   const users = await store.all('users');

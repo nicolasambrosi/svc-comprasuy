@@ -4,12 +4,14 @@ const crypto = require('crypto');
 const store = require('./store');
 const auth = require('./auth');
 const images = require('./images');
+const { scopeOf, inScope, canSeeClient, canSeeSale } = require('./scope');
 const { calcSale, num, round2 } = require('../app/app/calc.js');
 
 const STATUSES = ['pagada', 'pendiente', 'entregada', 'anulada'];
 const PAYMENTS = ['Efectivo', 'Débito', 'Crédito', 'Transferencia', 'Cuenta corriente'];
 const IVAS = [22, 10, 0];
-const DEFAULT_SETTINGS = { id: 'main', company: 'Comprasuy', rut: '', address: '', phone: '', email: '', nextNumber: 1, lowStockDefault: 5 };
+const DEFAULT_SETTINGS = { id: 'main', company: 'Comprasuy', rut: '', address: '', phone: '', email: '', nextNumber: 1, lowStockDefault: 5, gpsRadius: 100 };
+const PAID = ['pagada', 'entregada']; // estados que cuentan como cobrados (para comisiones)
 
 const uid = p => p + '-' + Date.now().toString(36) + crypto.randomBytes(4).toString('hex');
 const str = (v, max) => (v == null ? '' : String(v)).trim().slice(0, max || 200);
@@ -45,9 +47,15 @@ function cleanClient(b, old) {
   c.doc = str(b.doc, 30); c.phone = str(b.phone, 40); c.email = str(b.email, 120); c.address = str(b.address, 200); c.notes = str(b.notes, 1000);
   return c;
 }
-const canSeeSale = (user, s) => user.role === 'admin' || s.userId === user.id;
-// Cada cliente puede tener un vendedor asignado (sellerId). Los vendedores solo ven y usan sus clientes.
-const canSeeClient = (user, c) => user.role === 'admin' || (!!c.sellerId && c.sellerId === user.id);
+// Cada cliente puede tener un vendedor asignado (sellerId). Ver server/scope.js para quién ve qué.
+const pct = v => Math.min(Math.max(round2(num(v)), 0), 100);
+async function userExtras(b, old) {
+  const o = {};
+  if (b.zoneId !== undefined) { o.zoneId = str(b.zoneId, 90); if (o.zoneId && !(await store.get('zones', o.zoneId))) fail(400, 'La zona elegida no existe.'); }
+  if (b.commissionPct !== undefined) o.commissionPct = pct(b.commissionPct);
+  if (b.teamCommissionPct !== undefined) o.teamCommissionPct = pct(b.teamCommissionPct);
+  return o;
+}
 async function sellerIdFrom(v) {
   const id = str(v, 90); if (!id) return '';
   if (!(await store.get('users', id))) fail(400, 'El vendedor elegido no existe.');
@@ -85,14 +93,16 @@ module.exports = function api() {
 
   // ---------- todos los datos visibles para el usuario ----------
   r.get('/data', needUser, wrap(async (req, res) => {
-    const isAdmin = req.user.role === 'admin';
-    const [products, clients, sales, settings, users] = await Promise.all([
-      store.all('products'), store.all('clients'), store.all('sales'), getSettings(), isAdmin ? store.all('users') : []
+    const sc = await scopeOf(req.user);
+    const [products, clients, sales, settings, users, zones] = await Promise.all([
+      store.all('products'), store.all('clients'), store.all('sales'), getSettings(), store.all('users'), store.all('zones')
     ]);
     res.json({
-      me: auth.publicUser(req.user), settings, products, clients: clients.filter(c => canSeeClient(req.user, c)),
-      sales: sales.filter(s => canSeeSale(req.user, s)),
-      users: users.map(auth.publicUser),
+      me: auth.publicUser(req.user), settings, products, clients: clients.filter(c => canSeeClient(sc, c)),
+      sales: sales.filter(s => canSeeSale(sc, s)),
+      // admin: todos; supervisor: su equipo; vendedor: nadie más
+      users: req.user.role === 'vendedor' ? [] : users.filter(u => inScope(sc, u.id)).map(auth.publicUser),
+      zones,
       storage: store.kind
     });
   }));
@@ -155,7 +165,9 @@ module.exports = function api() {
   r.post('/clients', needUser, wrap(async (req, res) => {
     const c = cleanClient(req.body); c.id = uid('c'); c.createdBy = req.user.id;
     // el vendedor que crea un cliente queda asignado; el administrador elige a quién (o a nadie)
-    c.sellerId = req.user.role === 'admin' ? await sellerIdFrom(req.body.sellerId) : req.user.id;
+    if (req.user.role === 'admin') c.sellerId = await sellerIdFrom(req.body.sellerId);
+    else if (req.user.role === 'supervisor') { const sid = await sellerIdFrom(req.body.sellerId); c.sellerId = sid && inScope(await scopeOf(req.user), sid) ? sid : req.user.id; }
+    else c.sellerId = req.user.id;
     res.json(await store.put('clients', c));
   }));
   // asignar varios clientes a un vendedor (o dejarlos sin asignar con sellerId vacío)
@@ -171,9 +183,13 @@ module.exports = function api() {
     res.json({ ok: true, updated: n });
   }));
   r.put('/clients/:id', needUser, wrap(async (req, res) => {
-    const old = await store.get('clients', req.params.id); if (!old || !canSeeClient(req.user, old)) fail(404, 'Cliente no encontrado.');
+    const sc = await scopeOf(req.user);
+    const old = await store.get('clients', req.params.id); if (!old || !canSeeClient(sc, old)) fail(404, 'Cliente no encontrado.');
     const c = cleanClient(req.body, old);
-    if (req.user.role === 'admin' && req.body.sellerId !== undefined) c.sellerId = await sellerIdFrom(req.body.sellerId);
+    if (req.user.role !== 'vendedor' && req.body.sellerId !== undefined) {
+      const sid = await sellerIdFrom(req.body.sellerId);
+      if (req.user.role === 'admin' || (sid && inScope(sc, sid))) c.sellerId = sid;
+    }
     await store.put('clients', c);
     if (c.name !== old.name) { // las ventas guardan el nombre del cliente
       for (const s of await store.all('sales')) if (s.clientId === c.id) { s.clientName = c.name; await store.put('sales', s); }
@@ -191,7 +207,7 @@ module.exports = function api() {
     const status = ['pagada', 'pendiente', 'entregada'].includes(b.status) ? b.status : 'pagada';
     const discountPct = Math.min(Math.max(num(b.discountPct), 0), 100);
     const client = b.clientId ? await store.get('clients', String(b.clientId)) : null;
-    if (b.clientId && (!client || !canSeeClient(req.user, client))) fail(400, 'El cliente no existe o no está asignado a tu usuario.');
+    if (b.clientId && (!client || !canSeeClient(await scopeOf(req.user), client))) fail(400, 'El cliente no existe o no está asignado a tu usuario.');
     if (status === 'pendiente' && !client) fail(400, 'Elegí un cliente para dejar la venta pendiente de cobro.');
     if (!LISTS.includes(b.list)) fail(400, 'Elegí si la venta es para un comercio o una institución.');
     const list = b.list;
@@ -217,6 +233,7 @@ module.exports = function api() {
         list, items, discountPct, payment, status, notes: str(b.notes, 500),
         userId: req.user.id, userName: req.user.name
       }, calcSale(items, discountPct));
+      if (PAID.includes(status)) sale.paidAt = sale.date;
       settings.nextNumber++;
       for (const p of products) await s.put('products', p);
       await s.put('settings', settings);
@@ -229,9 +246,10 @@ module.exports = function api() {
     const to = req.body.status;
     if (!STATUSES.includes(to)) fail(400, 'Estado inválido.');
     if (to === 'anulada' && req.user.role !== 'admin') fail(403, 'Solo un administrador puede anular ventas.');
+    const sc = await scopeOf(req.user);
     const sale = await store.tx(async s => {
       const sale = await s.get('sales', req.params.id);
-      if (!sale || !canSeeSale(req.user, sale)) fail(404, 'Venta no encontrada.');
+      if (!sale || !canSeeSale(sc, sale)) fail(404, 'Venta no encontrada.');
       if (sale.status === 'anulada') fail(400, 'La venta ya está anulada.');
       if (to === 'anulada') {
         for (const it of sale.items) {
@@ -241,6 +259,8 @@ module.exports = function api() {
         sale.cancelledBy = req.user.name; sale.cancelledAt = new Date().toISOString();
       }
       sale.status = to;
+      if (PAID.includes(to) && !sale.paidAt) sale.paidAt = new Date().toISOString(); // fecha de cobro: cuenta para la comisión
+      if (!PAID.includes(to)) delete sale.paidAt;
       return s.put('sales', sale);
     });
     res.json(sale);
@@ -251,6 +271,7 @@ module.exports = function api() {
     const s = await getSettings(), b = req.body;
     s.company = str(b.company, 120) || 'Comprasuy'; s.rut = str(b.rut, 30); s.address = str(b.address, 200); s.phone = str(b.phone, 40);
     s.nextNumber = Math.max(1, int(b.nextNumber)); s.lowStockDefault = Math.max(0, int(b.lowStockDefault));
+    if (b.gpsRadius !== undefined) s.gpsRadius = Math.min(Math.max(int(b.gpsRadius), 20), 2000);
     res.json(await store.put('settings', s));
   }));
 
@@ -269,6 +290,7 @@ module.exports = function api() {
       id: uid('u'), name: str(b.name, 100) || email, email, role: auth.ROLES.includes(b.role) ? b.role : 'vendedor',
       active: b.active !== false, passwordHash: await auth.hashPassword(b.password), createdAt: new Date().toISOString()
     };
+    Object.assign(u, await userExtras(b));
     await store.put('users', u);
     res.json(auth.publicUser(u));
   }));
@@ -280,7 +302,7 @@ module.exports = function api() {
     if (other && other.id !== u.id) fail(409, 'Ya existe un usuario con ese email.');
     const role = auth.ROLES.includes(b.role) ? b.role : u.role, active = b.active !== false;
     await checkAdminsLeft(u.id, role === 'admin' && active);
-    Object.assign(u, { name: str(b.name, 100) || email, email, role, active });
+    Object.assign(u, { name: str(b.name, 100) || email, email, role, active }, await userExtras(b, u));
     if (b.password) { const err = auth.passwordError(b.password); if (err) fail(400, err); u.passwordHash = await auth.hashPassword(b.password); }
     await store.put('users', u);
     res.json(auth.publicUser(u));
@@ -289,6 +311,7 @@ module.exports = function api() {
     if (req.params.id === req.user.id) fail(400, 'No podés borrar tu propio usuario.');
     await checkAdminsLeft(req.params.id, false);
     await store.del('users', req.params.id);
+    for (const z of await store.all('zones')) if (z.supervisorId === req.params.id) { z.supervisorId = ''; await store.put('zones', z); }
     for (const c of await store.all('clients')) if (c.sellerId === req.params.id) { c.sellerId = ''; await store.put('clients', c); } // quedan sin asignar
     res.json({ ok: true });
   }));
@@ -337,6 +360,8 @@ module.exports = function api() {
     });
     res.json(out);
   }));
+
+  require('./terreno')(r, { wrap, needUser, needAdmin, fail, str, int, uid, getSettings, PAID });
 
   r.use((req, _res, next) => next(new HttpError(404, 'No existe ' + req.path)));
   // eslint-disable-next-line no-unused-vars
