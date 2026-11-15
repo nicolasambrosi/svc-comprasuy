@@ -95,6 +95,16 @@ Siempre tiene que quedar al menos un administrador activo. Tras 8 intentos falli
   4. Cada día, la ruta del vendedor es la suma de sus recorridos de ese día. En Rutas se cambia un día puntual
      (eso manda sobre el recorrido; "Vaciar" deja ese día sin visitas).
   El supervisor ve y maneja los comercios de las zonas que supervisa, aunque todavía no tengan vendedor.
+- **Comercios nuevos (prospectos)**: Recorridos → en cada zona, "🔎 Buscar comercios nuevos". Se elige rubro (almacén,
+  kiosco, panadería, carnicería, verdulería, bebidas, farmacia, gastronomía, residenciales, colegios, salud), se acerca el
+  mapa a la zona (máx. ~6 km de lado) y "Buscar en esta área". Busca en **OpenStreetMap** (Overpass API; gratis, datos
+  © colaboradores de OpenStreetMap, licencia ODbL) y marca cada uno: nuevo, ya es cliente (por nombre y cercanía),
+  ya agregado o posible duplicado. Los tildados entran como clientes **Prospecto** en la zona, ubicados y sin vendedor;
+  se suman a un recorrido como cualquier comercio y el vendedor los ve marcados "nuevo" en Hoy. Con la **primera venta**
+  pasan a cliente (queda `convertedAt`). "Ocultar" evita que uno vuelva a salir. La búsqueda puede tardar hasta un minuto
+  (el servidor público de OpenStreetMap a veces está saturado; se reintenta con otro). No están todos los comercios y casi
+  nunca traen teléfono. **No se usa Google Maps**: sus condiciones no permiten copiar ni guardar sus comercios.
+  En Clientes, el filtro "Solo prospectos" los lista.
   La zona de un **usuario** (Usuarios → Editar) sigue indicando qué supervisor tiene a cargo a ese vendedor.
 - **GPS**: el check-in vale si el vendedor está a menos del radio (Configuración, 100 m por defecto) del comercio.
   Si está lejos o sin GPS **se registra igual** y queda marcado para el supervisor (no bloquea). Requiere HTTPS y que el
@@ -119,7 +129,9 @@ Siempre tiene que quedar al menos un administrador activo. Tras 8 intentos falli
   **Transcripción automática de los audios con IA: no está activada.** La API de Claude no recibe audio, así que haría
   falta un servicio de voz a texto aparte (cuenta, costo por minuto y clave en las variables de entorno); después Claude
   podría resumir la transcripción en campos (resultado, objeciones, competencia, próximo paso).
-- Colecciones nuevas en `svc_docs`: `zones`, `recorridos`, `routes`, `visits`, `commissions`, `profiles`, `audios` (los audios no van
+- "Cómo llegar" y WhatsApp abren siempre en la misma pestaña aparte (no una nueva por cada toque) y las fotos del
+  perfil se ven en grande dentro de la app.
+- Colecciones nuevas en `svc_docs`: `zones`, `recorridos`, `osmskip` (comercios de OpenStreetMap ocultados), `routes`, `visits`, `commissions`, `profiles`, `audios` (los audios no van
   en el respaldo descargable). El respaldo (Configuración →
   Descargar respaldo) las incluye; "Restaurar respaldo" no las toca.
 

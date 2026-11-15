@@ -262,6 +262,11 @@ module.exports = function api() {
       for (const p of products) await s.put('products', p);
       await s.put('settings', settings);
       await s.put('sales', sale);
+      // un prospecto pasa a cliente con su primera venta
+      if (client) {
+        const cl = await s.get('clients', client.id);
+        if (cl && cl.prospect) { cl.prospect = false; cl.convertedAt = sale.date; cl.convertedBy = req.user.id; await s.put('clients', cl); }
+      }
       return sale;
     });
     res.json(sale);
@@ -389,6 +394,7 @@ module.exports = function api() {
   }));
 
   require('./terreno')(r, { wrap, needUser, needAdmin, fail, str, int, uid, getSettings, PAID });
+  require('./prospectos')(r, { wrap, needUser, fail, str, uid });
 
   r.use((req, _res, next) => next(new HttpError(404, 'No existe ' + req.path)));
   // eslint-disable-next-line no-unused-vars

@@ -314,3 +314,21 @@ ul.plain{margin:6px 0;padding-left:18px}
 .rec-form .f input,.rec-form .f select{padding:10px;border:1px solid var(--g20);border-radius:10px;font:inherit;background:#fff;min-width:0}
 .rec-form .f:last-child{grid-column:1/-1}
 .rec-zone{margin-bottom:16px}
+
+/* ===== Fotos: visor dentro de la app ===== */
+.pf-view{display:block;width:100%;padding:0;border:0;background:none;cursor:zoom-in}
+.pf-view img{display:block;width:100%}
+.photo-view{position:fixed;inset:0;z-index:300;background:rgba(0,0,0,.88);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:16px}
+.photo-view img{max-width:100%;max-height:calc(100% - 64px);object-fit:contain;border-radius:8px}
+
+/* ===== Prospectos ===== */
+.ps-map{height:420px}
+.ps-list{max-height:520px;overflow:auto;border:1px solid var(--g10);border-radius:12px}
+.ps-row{display:flex;gap:8px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--g10)}
+.ps-row:last-child{border:0}
+.ps-row label{flex:1;display:flex;gap:10px;align-items:flex-start;min-width:0;cursor:pointer}
+.ps-row label input{width:18px;height:18px;margin-top:2px;accent-color:var(--orange);flex:none}
+.ps-row .t{display:flex;flex-direction:column;min-width:0}
+.ps-row.st-cliente,.ps-row.st-prospecto,.ps-row.st-oculto{opacity:.7}
+.ps-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px;vertical-align:middle}
+.ps-legend{display:flex;flex-wrap:wrap;gap:12px;font-size:13px;margin:8px 0}

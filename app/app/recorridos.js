@@ -45,8 +45,11 @@
     $('#recBody', el).innerHTML = zones.map(function (z) {
       var list = recs.filter(function (r) { return r.zoneId === z.id; }).sort(function (a, b) { return a.name.localeCompare(b.name); });
       var zc = clients.filter(function (c) { return c.zoneId === z.id; }), free = zc.filter(function (c) { return !inRec[c.id]; }).length;
+      var pros = zc.filter(function (c) { return c.prospect; }).length, conv = zc.filter(function (c) { return c.convertedAt; }).length;
       return '<div class="card rec-zone"><div class="head" style="margin-bottom:8px"><h2 style="margin:0">' + esc(z.name) + '</h2>' +
-        '<span class="muted small">' + zc.length + ' comercios' + (free ? ' · <b>' + free + ' sin recorrido</b>' : '') + '</span></div>' +
+        '<span class="muted small">' + zc.length + ' comercios' + (free ? ' · <b>' + free + ' sin recorrido</b>' : '') +
+        (pros ? ' · ' + pros + ' prospecto' + (pros > 1 ? 's' : '') : '') + (conv ? ' · ' + conv + ' convertido' + (conv > 1 ? 's' : '') : '') + '</span>' +
+        '<button class="btn sm" data-pros="' + z.id + '">🔎 Buscar comercios nuevos</button></div>' +
         (list.length ? '<div class="tbl-wrap"><table><thead><tr><th>Recorrido</th><th>Vendedor</th><th>Días</th><th class="num">Comercios</th><th></th></tr></thead><tbody>' +
           list.map(function (r) {
             var sinGeo = r.stops.filter(function (id) { return !G().hasGeo(byId(clients, id)); }).length;
@@ -58,6 +61,7 @@
     }).join('');
     $('#recBody', el).onclick = function (e) {
       var b = e.target.closest('button'); if (!b) return;
+      if (b.dataset.pros) { S.prospector(el, byId(myZones(), b.dataset.pros)); return; }
       if (b.dataset.redit) editor(el, JSON.parse(JSON.stringify(byId(recs, b.dataset.redit))));
       if (b.dataset.rdel) {
         var r = byId(recs, b.dataset.rdel);
@@ -100,7 +104,7 @@
         var who = c.sellerId ? userName(c.sellerId) : '';
         return '<button type="button" class="pick" data-add="' + c.id + '"><b>' + esc(c.name) + '</b><span class="muted small">' + esc(c.address || 'Sin dirección') +
           (show !== 'zone' && c.zoneId ? ' · zona ' + esc(zoneName(c.zoneId)) : '') + (who ? ' · ' + esc(who) : ' · sin vendedor') +
-          (otherRec[c.id] ? ' · en ' + esc(otherRec[c.id].join(', ')) : '') + (G().hasGeo(c) ? '' : ' · sin ubicar') + '</span><span class="add">+</span></button>';
+          (otherRec[c.id] ? ' · en ' + esc(otherRec[c.id].join(', ')) : '') + (c.prospect ? ' · prospecto' : '') + (G().hasGeo(c) ? '' : ' · sin ubicar') + '</span><span class="add">+</span></button>';
       }).join('') + (list.length > 150 ? '<p class="muted small">Mostrando 150 de ' + list.length + '. Buscá para afinar.</p>' : '')
         : '<p class="muted small">' + (show === 'zone' ? 'No hay más comercios en esta zona. Pasá a “Sin zona” o “Todos”, o asigná la zona en Clientes.' : 'No hay más comercios con ese filtro.') + '</p>';
     }

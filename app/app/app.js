@@ -843,7 +843,7 @@
   views.clientes = function (el) {
     var adm = isAdmin(), boss = isBoss() && zoneOptions().length > 0, chk = adm || boss;
     el.innerHTML = '<div class="head"><h1>Clientes</h1><div class="actions"><button class="btn" id="exp">Exportar CSV</button><button class="btn primary" id="add">+ Nuevo cliente</button></div></div>' +
-      '<div class="toolbar"><input type="search" id="q" placeholder="Buscar por nombre, RUT, teléfono…"><select id="dbt"><option value="">Todos</option><option value="1">Con saldo pendiente</option></select>' +
+      '<div class="toolbar"><input type="search" id="q" placeholder="Buscar por nombre, RUT, teléfono…"><select id="dbt"><option value="">Todos</option><option value="1">Con saldo pendiente</option><option value="c">Solo clientes</option><option value="p">Solo prospectos</option></select>' +
       (adm ? '<select id="sel"><option value="">Todos los vendedores</option><option value="-">Sin asignar</option>' +
         sellerOptions(false).map(function (o) { return '<option value="' + esc(o.v) + '">' + esc(o.t) + '</option>'; }).join('') + '</select>' : '') +
       (isBoss() && (db.zones || []).length ? '<select id="zf"><option value="">Todas las zonas</option><option value="-">Sin zona</option>' +
@@ -866,7 +866,7 @@
       var q = $('#q', el).value.toLowerCase(), dbt = $('#dbt', el).value, sel = adm ? $('#sel', el).value : '', zf = $('#zf', el) ? $('#zf', el).value : '';
       var list = db.clients.map(function (c) { return { c: c, s: clientStats(c.id) }; }).filter(function (x) {
         var sid = adm && x.c.sellerId && byId(db.users, x.c.sellerId) ? x.c.sellerId : '';
-        return (!dbt || x.s.debt > 0) && (!sel || (sel === '-' ? !sid : sid === sel)) && (!zf || (zf === '-' ? !x.c.zoneId : x.c.zoneId === zf)) &&
+        return (!dbt || (dbt === '1' ? x.s.debt > 0 : dbt === 'p' ? !!x.c.prospect : !x.c.prospect)) && (!sel || (sel === '-' ? !sid : sid === sel)) && (!zf || (zf === '-' ? !x.c.zoneId : x.c.zoneId === zf)) &&
           (!q || (x.c.name + ' ' + x.c.doc + ' ' + x.c.phone + ' ' + x.c.email + ' ' + sellerName(sid)).toLowerCase().indexOf(q) >= 0);
       }).sort(function (a, b) { return a.c.name.localeCompare(b.c.name); });
       shown = list.map(function (x) { return x.c.id; });
@@ -877,7 +877,7 @@
         list.map(function (x) {
           var sn = adm ? sellerName(x.c.sellerId) : '';
           return '<tr>' + (chk ? '<td class="chk"><input type="checkbox" data-pick="' + x.c.id + '"' + (picked[x.c.id] ? ' checked' : '') + '></td>' : '') +
-            '<td><b>' + esc(x.c.name) + '</b><div class="small muted">' + esc(x.c.address) + '</div></td><td>' + esc(x.c.doc) + '</td><td>' + esc(x.c.phone) + '</td>' +
+            '<td><b>' + esc(x.c.name) + '</b>' + (x.c.prospect ? ' <span class="pill pendiente">Prospecto</span>' : '') + '<div class="small muted">' + esc(x.c.address) + '</div></td><td>' + esc(x.c.doc) + '</td><td>' + esc(x.c.phone) + '</td>' +
             (adm ? '<td>' + (sn ? esc(sn) : '<span class="muted">Sin asignar</span>') + '</td>' : '') +
             (isBoss() ? '<td>' + (x.c.zoneId ? esc(zoneName(x.c.zoneId)) : '<span class="muted">—</span>') + '</td>' : '') +
             '<td class="num">' + x.s.count + '</td><td class="num">' + money(x.s.total) + '</td><td class="num">' + (x.s.debt ? '<span class="pill pendiente">' + money(x.s.debt) + '</span>' : '—') + '</td>' +

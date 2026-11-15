@@ -2,6 +2,18 @@
    días y horario de atención, notas y fotos de fachada / góndola. Usa window.SVC (app.js). */
 (function () {
   'use strict';
+  // Foto grande encima de todo, sin abrir otra ventana. Se cierra tocando o con Escape.
+  function showPhoto(src) {
+    var d = document.createElement('div');
+    d.className = 'photo-view';
+    d.innerHTML = '<img alt="Foto"><button type="button" class="btn">✕ Cerrar</button>';
+    d.querySelector('img').src = src;
+    function close() { d.remove(); document.removeEventListener('keydown', onKey, true); }
+    function onKey(e) { if (e.key === 'Escape') { e.stopPropagation(); close(); } }
+    d.addEventListener('click', close);
+    document.addEventListener('keydown', onKey, true);
+    document.body.appendChild(d);
+  }
   var S = window.SVC;
   var $ = S.$, $$ = S.$$, esc = S.esc, api = S.api, toast = S.toast;
 
@@ -98,13 +110,15 @@
       function drawPhotos() {
         var ph = p.photos || [];
         $('#pfGrid', m).innerHTML = ph.length ? ph.map(function (x) {
-          return '<figure><a href="' + imgUrl(x.imageId) + '" target="_blank" rel="noopener"><img src="' + imgUrl(x.imageId) + '" alt="' + esc(KINDS[x.kind]) + '" loading="lazy"></a>' +
+          return '<figure><button type="button" class="pf-view" data-photo="' + esc(x.imageId) + '" aria-label="Ver foto grande"><img src="' + imgUrl(x.imageId) + '" alt="' + esc(KINDS[x.kind]) + '" loading="lazy"></button>' +
             '<figcaption><b>' + esc(KINDS[x.kind] || '') + '</b> ' + S.fmtDate(x.at) + '<br><span class="muted">' + esc(x.by || '') + '</span></figcaption>' +
             '<button type="button" class="pf-del" data-del="' + esc(x.imageId) + '" aria-label="Borrar foto">✕</button></figure>';
         }).join('') : '<p class="muted small">Sin fotos todavía. Con la tablet se abre la cámara.</p>';
       }
       drawPhotos();
       m.addEventListener('click', function (e) {
+        var vw = e.target.closest('.pf-view[data-photo]');
+        if (vw) { showPhoto(imgUrl(vw.dataset.photo)); return; }
         var chip = e.target.closest('.chip');
         if (chip) {
           var g = chip.closest('.pf-group');

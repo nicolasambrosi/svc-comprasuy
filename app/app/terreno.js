@@ -118,10 +118,11 @@
     var wa = waLink(c.phone);
     return '<div class="ficha">' +
       '<h2>' + esc(c.name) + '</h2>' +
+      (c.prospect ? '<p><span class="pill pendiente">Prospecto</span> <span class="small muted">Comercio nuevo' + (c.osmId ? ' (sacado de OpenStreetMap)' : '') + ': confirmá nombre, dirección, RUT y teléfono.</span></p>' : '') +
       '<p class="muted">' + (esc(c.address) || 'Sin dirección') + (c.doc ? ' · RUT/CI ' + esc(c.doc) : '') + '</p>' +
       '<div class="ficha-actions">' + (c.phone ? '<a class="btn sm" href="tel:' + esc(String(c.phone).split('/')[0].replace(/[^\d+]/g, '')) + '">📞 Llamar</a>' : '') +
-      (wa ? '<a class="btn sm" href="' + wa + '" target="_blank" rel="noopener">WhatsApp</a>' : '') +
-      '<a class="btn sm" href="' + mapsLink(c) + '" target="_blank" rel="noopener">🧭 Cómo llegar</a></div>' +
+      (wa ? '<a class="btn sm" href="' + wa + '" target="svc_whatsapp" rel="noopener">WhatsApp</a>' : '') +
+      '<a class="btn sm" href="' + mapsLink(c) + '" target="svc_mapa" rel="noopener">🧭 Cómo llegar</a></div>' +
       (debt ? '<p><span class="pill pendiente">Saldo pendiente ' + money(debt) + '</span></p>' : '') +
       (c.notes ? '<p class="small"><b>Notas:</b> ' + esc(c.notes) + '</p>' : '') +
       '<h3>Perfil del negocio</h3><div class="prof-sum"></div>' +
@@ -186,10 +187,10 @@
       '<ol class="stops">' + stops.map(function (c, i) {
         var v = visitOf(c.id), state = v ? (v.checkOut ? 'done' : 'now') : (i === nextIdx ? 'next' : '');
         var d = lastPos && hasGeo(c) ? fmtDist(distanceM(lastPos, c)) : '';
-        return '<li class="stop ' + state + '"><span class="n">' + (i + 1) + '</span><div class="stop-main"><b>' + esc(c.name) + '</b>' +
+        return '<li class="stop ' + state + '"><span class="n">' + (i + 1) + '</span><div class="stop-main"><b>' + esc(c.name) + '</b>' + (c.prospect ? ' <span class="pill pendiente">nuevo</span>' : '') +
           '<span class="muted small">' + (esc(c.address) || 'Sin dirección') + (d ? ' · a ' + d : '') + (hasGeo(c) ? '' : ' · sin ubicar') + '</span>' +
           (v ? '<span class="small">' + hhmm(v.checkIn.ts) + (v.checkOut ? '–' + hhmm(v.checkOut.ts) + ' ' + resultPill(v.result) : ' · <b>en visita</b>') + ' ' + gpsPill(v) + '</span>' : '') + '</div>' +
-          '<div class="stop-act">' + (v ? '' : '<a class="btn sm" href="' + mapsLink(c) + '" target="_blank" rel="noopener">🧭</a><button class="btn sm' + (state === 'next' ? ' primary' : '') + '" data-in="' + c.id + '"' + (open ? ' disabled' : '') + '>Check-in</button>') + '</div></li>';
+          '<div class="stop-act">' + (v ? '' : '<a class="btn sm" href="' + mapsLink(c) + '" target="svc_mapa" rel="noopener">🧭</a><button class="btn sm' + (state === 'next' ? ' primary' : '') + '" data-in="' + c.id + '"' + (open ? ' disabled' : '') + '>Check-in</button>') + '</div></li>';
       }).join('') + '</ol>' +
       (offRoute.length ? '<h3>Fuera de ruta</h3><ul class="stops">' + offRoute.map(function (v) {
         return '<li class="stop ' + (v.checkOut ? 'done' : 'now') + '"><span class="n">+</span><div class="stop-main"><b>' + esc(v.clientName) + '</b><span class="small">' + hhmm(v.checkIn.ts) +
@@ -233,7 +234,7 @@
     var d = lastPos && hasGeo(c) ? fmtDist(distanceM(lastPos, c)) : '';
     return '<div class="card next-card"><span class="tag">PRÓXIMA VISITA</span><h2>' + esc(c.name) + '</h2>' +
       '<p class="muted">' + (esc(c.address) || 'Sin dirección') + (d ? ' · a ' + d : '') + '</p>' +
-      '<div class="two-btn"><a class="btn" href="' + mapsLink(c) + '" target="_blank" rel="noopener">🧭 Cómo llegar</a><button class="btn primary" id="nextIn" data-c="' + c.id + '">📍 Check-in</button></div></div>';
+      '<div class="two-btn"><a class="btn" href="' + mapsLink(c) + '" target="svc_mapa" rel="noopener">🧭 Cómo llegar</a><button class="btn primary" id="nextIn" data-c="' + c.id + '">📍 Check-in</button></div></div>';
   }
 
   function openVisitHtml(v) {
@@ -665,7 +666,7 @@
   // CONFIGURACIÓN (admin): zonas y ubicación de clientes
   // ======================================================================
   // para recorridos.js
-  S.geo = { drawMap: drawMap, distanceM: distanceM, hasGeo: hasGeo, teamUsers: teamUsers, DAYS: DAYS };
+  S.geo = { drawMap: drawMap, distanceM: distanceM, hasGeo: hasGeo, teamUsers: teamUsers, DAYS: DAYS, loadLeaflet: loadLeaflet };
   S.configExtra = function (box) {
     if (!box || !S.isAdmin()) return;
     var zones = db().zones || [], users = db().users;
