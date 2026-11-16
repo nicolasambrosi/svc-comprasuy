@@ -87,26 +87,43 @@
   }
   var COLORS = { orange: '#ff7a1a', green: '#1f9d55', red: '#d64545', gray: '#8a8a8a', blue: '#2b6cb0', dark: '#1c1c1c' };
   // points: [{lat, lng, label, color, n}]  · line: true une los puntos en orden
+  var MVD = [-34.8941, -56.1653];
+  // points: [{lat, lng, label, color, n, dot}]  · line: true une los puntos en orden · dot: punto chico (sin número)
+  // Siempre muestra el mapa: si ningún punto tiene ubicación, centra en Montevideo y avisa (opts.empty).
   function drawMap(box, points, opts) {
     opts = opts || {};
     var pts = points.filter(function (p) { return typeof p.lat === 'number' && typeof p.lng === 'number'; });
-    if (!pts.length) { box.innerHTML = '<div class="map-empty muted small">No hay puntos con ubicación para mostrar.</div>'; return Promise.resolve(); }
-    box.innerHTML = '<div class="map-empty muted small">Cargando mapa…</div>';
+    if (box._svcMap) { box._svcMap.remove(); box._svcMap = null; }
+    if (!window.L) box.innerHTML = '<div class="map-empty muted small">Cargando mapa…</div>';
     return loadLeaflet().then(function () {
+      var L = window.L;
+      if (box._svcMap) { box._svcMap.remove(); box._svcMap = null; }
       box.innerHTML = '';
-      var m = window.L.map(box, { scrollWheelZoom: false });
-      window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(m);
-      var latlngs = [];
+      var m = L.map(box, { scrollWheelZoom: false });
+      box._svcMap = m;
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(m);
+      var latlngs = [], line = [];
       pts.forEach(function (p) {
         var col = COLORS[p.color] || COLORS.orange;
-        var icon = window.L.divIcon({ className: 'mk', html: '<span style="background:' + col + '">' + (p.n != null ? p.n : '') + '</span>', iconSize: [26, 26], iconAnchor: [13, 13] });
-        window.L.marker([p.lat, p.lng], { icon: icon }).addTo(m).bindPopup(p.label || '');
-        if (p.radius) window.L.circle([p.lat, p.lng], { radius: p.radius, color: col, weight: 1, fillOpacity: 0.08 }).addTo(m);
+        if (p.dot) L.circleMarker([p.lat, p.lng], { radius: 6, color: '#fff', weight: 2, fillColor: col, fillOpacity: 0.9 }).addTo(m).bindPopup(p.label || '');
+        else {
+          var icon = L.divIcon({ className: 'mk', html: '<span style="background:' + col + '">' + (p.n != null ? p.n : '') + '</span>', iconSize: [26, 26], iconAnchor: [13, 13] });
+          L.marker([p.lat, p.lng], { icon: icon, zIndexOffset: 500 }).addTo(m).bindPopup(p.label || '');
+          line.push([p.lat, p.lng]);
+        }
+        if (p.radius) L.circle([p.lat, p.lng], { radius: p.radius, color: col, weight: 1, fillOpacity: 0.08 }).addTo(m);
         latlngs.push([p.lat, p.lng]);
       });
-      if (opts.line && latlngs.length > 1) window.L.polyline(latlngs, { color: COLORS.dark, weight: 2, opacity: 0.5, dashArray: '4 6' }).addTo(m);
-      if (latlngs.length === 1) m.setView(latlngs[0], 16); else m.fitBounds(latlngs, { padding: [30, 30], maxZoom: 17 });
+      if (opts.line && line.length > 1) L.polyline(line, { color: COLORS.dark, weight: 2, opacity: 0.5, dashArray: '4 6' }).addTo(m);
+      if (!latlngs.length) {
+        m.setView(MVD, 13);
+        var note = L.control({ position: 'topright' });
+        note.onAdd = function () { var d = L.DomUtil.create('div', 'map-note'); d.textContent = opts.empty || 'Ningún comercio de esta lista tiene ubicación todavía.'; return d; };
+        note.addTo(m);
+      } else if (latlngs.length === 1) m.setView(latlngs[0], 16);
+      else m.fitBounds(latlngs, { padding: [30, 30], maxZoom: 17 });
       setTimeout(function () { m.invalidateSize(); }, 50);
+      return m;
     }, function (e) { box.innerHTML = '<div class="map-empty muted small">' + esc(e.message) + '</div>'; });
   }
 

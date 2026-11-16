@@ -88,8 +88,8 @@
       '<select id="reShow"><option value="zone">De esta zona</option><option value="none">Sin zona</option><option value="all">Todos</option></select></div>' +
       '<div id="reList" class="pick-list tall"></div></div>' +
       '<div class="card"><div class="head" style="margin-bottom:8px"><h2 style="margin:0" id="reTitle"></h2>' +
-      '<div class="actions"><button class="btn sm" id="reNear">Ordenar por cercanía</button><button class="btn sm" id="reMap">🗺️ Mapa</button></div></div>' +
-      '<div class="map-box" id="reMapBox" hidden></div><ol id="reStops" class="stops edit"></ol>' +
+      '<div class="actions"><button class="btn sm" id="reNear">Ordenar por cercanía</button><button class="btn sm" id="reMap">Ocultar mapa</button></div></div>' +
+      '<div class="map-box" id="reMapBox"></div><p class="small muted" id="reMapNote"></p><ol id="reStops" class="stops edit"></ol>' +
       '<div class="rfoot"><span class="grow"></span>' + (rec.id ? '' : '') + '<button class="btn" id="reCancel">Cancelar</button><button class="btn primary" id="reSave">Guardar recorrido</button></div></div>' +
       '</div>';
 
@@ -117,13 +117,37 @@
           '<button class="btn sm danger" data-rm="' + i + '" aria-label="Quitar">✕</button></div></li>';
       }).join('') : '<li class="muted small" style="list-style:none">Tocá un comercio de la izquierda para agregarlo al recorrido.</li>';
     }
-    function change() { dirty = true; drawStops(); drawClients(); }
+    function change() { dirty = true; drawStops(); drawClients(); drawMapSoon(); }
+    // Mapa: los comercios del recorrido numerados (naranja) y los demás de la zona en gris (se agregan desde el globo).
+    var mapT = null;
+    function drawMapSoon() { clearTimeout(mapT); mapT = setTimeout(drawMap, 250); }
+    function drawMap() {
+      var box = $('#reMapBox', el); if (!box || box.hidden) return;
+      var cl = db().clients, z = zoneId(), hasGeo = G().hasGeo;
+      var rest = cl.filter(function (c) { return c.zoneId === z && stops.indexOf(c.id) < 0; });
+      var pts = stops.map(function (id, i) { var c = byId(cl, id) || {}; return { lat: c.lat, lng: c.lng, n: i + 1, label: '<b>' + esc(c.name) + '</b><br>' + esc(c.address || '') }; })
+        .concat(rest.map(function (c) {
+          return { lat: c.lat, lng: c.lng, dot: true, color: c.prospect ? 'blue' : 'gray', label: '<b>' + esc(c.name) + '</b><br>' + esc(c.address || '') + (c.prospect ? '<br><i>Prospecto</i>' : '') +
+            '<br><button type="button" class="btn sm primary" data-madd="' + c.id + '" style="margin-top:6px">+ Agregar al recorrido</button>' };
+        }));
+      var all = stops.map(function (id) { return byId(cl, id); }).filter(Boolean).concat(rest);
+      var sinGeo = all.filter(function (c) { return !hasGeo(c); }).length;
+      $('#reMapNote', el).innerHTML = (all.length ? 'Naranja: recorrido en orden · gris: otros comercios de la zona (tocalos para agregarlos) · azul: prospectos. ' : '') +
+        (sinGeo ? '<b>' + sinGeo + ' de ' + all.length + ' sin ubicar</b> (no aparecen en el mapa). ' +
+          (S.isAdmin() ? 'Ubicalos en <a href="#/config">Configuración → Ubicar clientes desde su dirección</a>.' : 'Pedile a un administrador que los ubique desde Configuración.') +
+          ' También se ubican solos en la primera visita con GPS.' : '');
+      G().drawMap(box, pts, { line: true, empty: all.length ? 'Los comercios de esta zona todavía no tienen ubicación.' : 'Agregá comercios a la zona para verlos acá.' });
+    }
+    $('#reMapBox', el).addEventListener('click', function (e) {
+      var b = e.target.closest('[data-madd]'); if (!b) return;
+      if (stops.indexOf(b.dataset.madd) < 0) { stops.push(b.dataset.madd); change(); }
+    });
     function leave() { if (!dirty || confirm('El recorrido tiene cambios sin guardar. ¿Descartarlos?')) S.views.recorridos(el); }
 
     $('#reBack', el).addEventListener('click', leave);
     $('#reCancel', el).addEventListener('click', leave);
     ['reName', 'reSeller'].forEach(function (id) { $('#' + id, el).addEventListener('input', function () { dirty = true; drawStops(); }); });
-    $('#reZone', el).addEventListener('change', function () { dirty = true; drawStops(); drawClients(); });
+    $('#reZone', el).addEventListener('change', function () { dirty = true; drawStops(); drawClients(); drawMapSoon(); });
     $('#reShow', el).addEventListener('change', function () { show = this.value; drawClients(); });
     $('#reQ', el).addEventListener('input', drawClients);
     $('#reDays', el).addEventListener('click', function (e) { var b = e.target.closest('[data-d]'); if (b) { b.classList.toggle('on'); dirty = true; drawStops(); } });
@@ -151,8 +175,9 @@
       if (without.length) toast(without.length + ' sin ubicar quedaron al final');
     });
     $('#reMap', el).addEventListener('click', function () {
-      var box = $('#reMapBox', el); box.hidden = !box.hidden; if (box.hidden) return;
-      G().drawMap(box, stops.map(function (id, i) { var c = byId(db().clients, id) || {}; return { lat: c.lat, lng: c.lng, n: i + 1, label: '<b>' + esc(c.name) + '</b><br>' + esc(c.address || '') }; }), { line: true });
+      var box = $('#reMapBox', el); box.hidden = !box.hidden;
+      $('#reMapNote', el).hidden = box.hidden; this.textContent = box.hidden ? '🗺️ Ver mapa' : 'Ocultar mapa';
+      drawMap();
     });
     $('#reSave', el).addEventListener('click', function () {
       var body = {
@@ -173,6 +198,6 @@
         return S.refresh();
       }).then(function () { S.views.recorridos(el); }, function (e) { toast(e.message, true); b.disabled = false; });
     });
-    drawStops(); drawClients();
+    drawStops(); drawClients(); drawMap();
   }
 })();

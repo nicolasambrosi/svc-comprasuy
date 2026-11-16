@@ -332,3 +332,5 @@ ul.plain{margin:6px 0;padding-left:18px}
 .ps-row.st-cliente,.ps-row.st-prospecto,.ps-row.st-oculto{opacity:.7}
 .ps-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px;vertical-align:middle}
 .ps-legend{display:flex;flex-wrap:wrap;gap:12px;font-size:13px;margin:8px 0}
+
+.map-note{background:#fff;padding:8px 10px;border-radius:10px;box-shadow:0 1px 6px rgba(0,0,0,.25);font-size:13px;max-width:240px}
