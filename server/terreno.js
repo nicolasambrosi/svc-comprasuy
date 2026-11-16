@@ -44,7 +44,14 @@ module.exports = function terreno(r, h) {
     }
     return z;
   }
-  r.post('/zones', needAdmin, wrap(async (req, res) => { const z = await cleanZone(req.body); z.id = uid('z'); res.json(await store.put('zones', z)); }));
+  // Crear zona: el administrador (con el supervisor que elija) o un supervisor (la zona queda a su cargo).
+  r.post('/zones', needBoss, wrap(async (req, res) => {
+    const b = Object.assign({}, req.body);
+    if (req.user.role === 'supervisor') b.supervisorId = req.user.id;
+    const z = await cleanZone(b); z.id = uid('z');
+    if ((await store.all('zones')).some(x => x.name.toLowerCase() === z.name.toLowerCase())) fail(409, 'Ya existe una zona con ese nombre.');
+    res.json(await store.put('zones', z));
+  }));
   r.put('/zones/:id', needAdmin, wrap(async (req, res) => {
     const old = await store.get('zones', req.params.id); if (!old) fail(404, 'Zona no encontrada.');
     res.json(await store.put('zones', await cleanZone(req.body, old)));

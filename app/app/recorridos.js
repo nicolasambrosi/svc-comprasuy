@@ -19,21 +19,41 @@
   var zoneName = function (id) { var z = byId(db().zones || [], id); return z ? z.name : ''; };
 
   var sel = { zoneId: '' }, recs = [];
+  // Nueva zona desde Recorridos: el supervisor la crea a su cargo; el administrador elige el supervisor.
+  // Después los comercios se suman a la zona con "Buscar comercios nuevos" (prospectos) o al guardar un recorrido.
+  function newZone(onCreated) {
+    var adm = S.isAdmin();
+    var sups = (db().users || []).filter(function (u) { return u.role === 'supervisor' && u.active !== false; }).sort(function (a, b) { return a.name.localeCompare(b.name); });
+    var fields = [{ name: 'name', label: 'Nombre de la zona (barrio o área)', req: true, full: true, ph: 'Ej.: Pocitos, Malvín norte, Av. Italia…' }];
+    if (adm) fields.push({ name: 'supervisorId', label: 'Supervisor a cargo', type: 'select', full: true, options: [{ v: '', t: 'Sin supervisor por ahora' }].concat(sups.map(function (u) { return { v: u.id, t: u.name }; })) });
+    S.formModal('Nueva zona', fields, {}, function (o) {
+      return api('POST', '/zones', o).then(function (z) {
+        return S.refresh().then(function () {
+          toast('Zona ' + z.name + ' creada. Sumale comercios con "Buscar comercios nuevos" o armando un recorrido.');
+          onCreated(z);
+        });
+      }, function (e) { toast(e.message, true); throw e; });
+    });
+  }
   S.views.recorridos = function (el) {
     if (!S.isBoss()) { el.innerHTML = '<div class="card empty">Solo supervisores y administradores.</div>'; return; }
     var zones = myZones();
+    var afterZone = function (z) { sel.zoneId = z.id; S.views.recorridos(el); };
     if (!zones.length) {
-      el.innerHTML = '<div class="head"><h1>Recorridos</h1></div><div class="card empty">' +
-        (S.isAdmin() ? 'Primero creá las zonas en <a href="#/config">Configuración → Zonas</a>.' : 'No tenés zonas a tu cargo. Pedile a un administrador que te asigne una.') + '</div>';
+      el.innerHTML = '<div class="head"><h1>Recorridos</h1><div class="actions"><button class="btn primary" id="zoneAdd">+ Nueva zona</button></div></div><div class="card empty">' +
+        'Todavía no ' + (S.isAdmin() ? 'hay zonas' : 'tenés zonas a tu cargo') + '. Creá una zona (un barrio o área) para agrupar comercios y armar sus recorridos.</div>';
+      $('#zoneAdd', el).addEventListener('click', function () { newZone(afterZone); });
       return;
     }
     if (sel.zoneId && !byId(zones, sel.zoneId)) sel.zoneId = '';
     el.innerHTML = '<div class="head"><h1>Recorridos</h1><div class="actions">' +
       '<select id="rzF"><option value="">Todas las zonas</option>' + zones.map(function (z) { return '<option value="' + z.id + '"' + (z.id === sel.zoneId ? ' selected' : '') + '>' + esc(z.name) + '</option>'; }).join('') + '</select>' +
+      '<button class="btn" id="zoneAdd">+ Nueva zona</button>' +
       '<button class="btn primary" id="recAdd">+ Nuevo recorrido</button></div></div>' +
       '<p class="muted small" style="margin-top:-6px">Cada recorrido es una lista de comercios de una zona. Asignado a un vendedor y a días de la semana, arma solo la ruta de esos días (en Rutas se puede cambiar un día puntual).</p>' +
       '<div id="recBody"><div class="card empty">Cargando…</div></div>';
     $('#rzF', el).addEventListener('change', function () { sel.zoneId = this.value; drawList(el); });
+    $('#zoneAdd', el).addEventListener('click', function () { newZone(afterZone); });
     $('#recAdd', el).addEventListener('click', function () { editor(el, { name: '', zoneId: sel.zoneId || zones[0].id, sellerId: '', days: [], stops: [] }); });
     api('GET', '/recorridos').then(function (list) { recs = list; if (el.isConnected) drawList(el); }, function (e) { $('#recBody', el).innerHTML = '<div class="card empty">' + esc(e.message) + '</div>'; });
   };
@@ -79,7 +99,8 @@
     el.innerHTML = '<div class="head"><h1>' + (rec.id ? 'Editar recorrido' : 'Nuevo recorrido') + '</h1><div class="actions"><button class="btn" id="reBack">← Volver</button></div></div>' +
       '<div class="card rec-form">' +
       '<label class="f">Nombre<input id="reName" maxlength="80" placeholder="Ej.: Centro mañana, Av. Italia…" value="' + esc(rec.name) + '"></label>' +
-      '<label class="f">Zona<select id="reZone">' + zones.map(function (z) { return '<option value="' + z.id + '"' + (z.id === rec.zoneId ? ' selected' : '') + '>' + esc(z.name) + '</option>'; }).join('') + '</select></label>' +
+      '<label class="f">Zona<select id="reZone">' + zones.map(function (z) { return '<option value="' + z.id + '"' + (z.id === rec.zoneId ? ' selected' : '') + '>' + esc(z.name) + '</option>'; }).join('') +
+      '<option value="__new">+ Nueva zona…</option></select></label>' +
       '<label class="f">Vendedor<select id="reSeller"><option value="">Sin asignar todavía</option>' + users.map(function (u) { return '<option value="' + u.id + '"' + (u.id === rec.sellerId ? ' selected' : '') + '>' + esc(u.name) + ' (' + S.ROLE_NAMES[u.role] + ')</option>'; }).join('') + '</select></label>' +
       '<div class="f"><span>Días de la semana</span><div class="chips" id="reDays" style="margin:6px 0 0">' + WEEK.map(function (d) { return '<button type="button" class="chip' + (rec.days.indexOf(d[0]) >= 0 ? ' on' : '') + '" data-d="' + d[0] + '">' + d[1] + '</button>'; }).join('') + '</div></div>' +
       '</div>' +
@@ -147,7 +168,20 @@
     $('#reBack', el).addEventListener('click', leave);
     $('#reCancel', el).addEventListener('click', leave);
     ['reName', 'reSeller'].forEach(function (id) { $('#' + id, el).addEventListener('input', function () { dirty = true; drawStops(); }); });
-    $('#reZone', el).addEventListener('change', function () { dirty = true; drawStops(); drawClients(); drawMapSoon(); });
+    var lastZone = $('#reZone', el).value;
+    $('#reZone', el).addEventListener('change', function () {
+      var s = this;
+      if (s.value === '__new') {
+        s.value = lastZone; // si cancela, queda la zona que estaba
+        newZone(function (z) {
+          var o = document.createElement('option'); o.value = z.id; o.textContent = z.name;
+          s.insertBefore(o, s.querySelector('option[value="__new"]'));
+          s.value = lastZone = z.id; dirty = true; drawStops(); drawClients(); drawMapSoon();
+        });
+        return;
+      }
+      lastZone = s.value; dirty = true; drawStops(); drawClients(); drawMapSoon();
+    });
     $('#reShow', el).addEventListener('change', function () { show = this.value; drawClients(); });
     $('#reQ', el).addEventListener('input', drawClients);
     $('#reDays', el).addEventListener('click', function (e) { var b = e.target.closest('[data-d]'); if (b) { b.classList.toggle('on'); dirty = true; drawStops(); } });
