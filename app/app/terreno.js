@@ -101,7 +101,7 @@
       box.innerHTML = '';
       var m = L.map(box, { scrollWheelZoom: false });
       box._svcMap = m;
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(m);
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap', referrerPolicy: 'strict-origin-when-cross-origin' }).addTo(m);
       var latlngs = [], line = [];
       pts.forEach(function (p) {
         var col = COLORS[p.color] || COLORS.orange;

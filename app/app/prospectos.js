@@ -43,7 +43,7 @@
     G().loadLeaflet().then(function () {
       var L = window.L; box.innerHTML = '';
       map = L.map(box, { scrollWheelZoom: true });
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; colaboradores de OpenStreetMap' }).addTo(map);
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; colaboradores de OpenStreetMap', referrerPolicy: 'strict-origin-when-cross-origin' }).addTo(map);
       var pts = db().clients.filter(function (c) { return c.zoneId === z.id && G().hasGeo(c); }).map(function (c) {
         L.circleMarker([c.lat, c.lng], { radius: 5, color: '#555', weight: 1, fillColor: '#999', fillOpacity: 0.8 }).addTo(map).bindPopup('<b>' + esc(c.name) + '</b><br>Cliente de la zona');
         return [c.lat, c.lng];
