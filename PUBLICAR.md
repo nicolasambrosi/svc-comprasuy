@@ -42,6 +42,10 @@ de esa lista. Cada venta guarda su lista; en Ventas se puede filtrar por ella. E
 La lista **remar** (REMAR) es privada: solo la ven los administradores. El servidor no manda sus productos ni sus ventas
 a supervisores ni vendedores, y solo un administrador puede vender con ella.
 
+**Importar productos (CSV):** en Productos, un administrador elige la lista y toca "Importar CSV" (columnas Codigo, Nombre, Categoria,
+Costo, Precio, IVA, Stock, StockMinimo; separador ; o , y decimales con coma). Si el código ya está en esa lista se actualiza;
+las columnas que no vienen quedan como estaban. El mismo código puede repetirse en listas distintas.
+
 **Duplicar venta:** en el comprobante de una venta (botón "Duplicar venta") o en el carrito, al elegir un cliente
 ("Repetir su última venta"), se copia la venta al carrito con los precios y el stock de hoy, para revisarla y guardarla como venta nueva.
 

@@ -124,18 +124,50 @@ module.exports = function api() {
   }));
 
   // ---------- productos (admin) ----------
+  // El código no se repite dentro de una misma lista (el mismo artículo puede estar en varias listas con otro precio).
+  const sameCode = (x, p) => x.code && p.code && x.code.toLowerCase() === p.code.toLowerCase() && listOf(x.list) === p.list;
   r.post('/products', needAdmin, wrap(async (req, res) => {
     const p = cleanProduct(req.body); p.id = uid('p');
     const all = await store.all('products');
-    if (p.code && all.some(x => x.code && x.code.toLowerCase() === p.code.toLowerCase())) fail(409, 'Ya existe un producto con ese código.');
+    if (all.some(x => sameCode(x, p))) fail(409, 'Ya existe un producto con ese código en esta lista.');
     res.json(await store.put('products', p));
   }));
   r.put('/products/:id', needAdmin, wrap(async (req, res) => {
     const old = await store.get('products', req.params.id); if (!old) fail(404, 'Producto no encontrado.');
     const p = cleanProduct(req.body, old);
     const all = await store.all('products');
-    if (p.code && all.some(x => x.id !== p.id && x.code && x.code.toLowerCase() === p.code.toLowerCase())) fail(409, 'Ya existe un producto con ese código.');
+    if (all.some(x => x.id !== p.id && sameCode(x, p))) fail(409, 'Ya existe un producto con ese código en esta lista.');
     res.json(await store.put('products', p));
+  }));
+  // Importar productos desde una planilla (CSV) a una lista: si el código ya está en esa lista se actualiza, si no se crea.
+  // El stock se toca solo si la planilla trae la columna Stock con un valor.
+  r.post('/products/import', needAdmin, wrap(async (req, res) => {
+    const list = req.body.list;
+    if (!LISTS.includes(list)) fail(400, 'Elegí la lista de precios.');
+    const items = Array.isArray(req.body.items) ? req.body.items.slice(0, 5000) : [];
+    if (!items.length) fail(400, 'La planilla no tiene productos.');
+    const out = await store.tx(async s => {
+      const all = await s.all('products');
+      let created = 0, updated = 0; const errors = [];
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i] || {};
+        try {
+          const code = str(it.code, 60);
+          const old = code ? all.find(x => sameCode(x, { code, list })) : null;
+          const hasStock = it.stock !== undefined && it.stock !== null && String(it.stock).trim() !== '';
+          const body = Object.assign({}, old || {}, it, { list });
+          if (!hasStock) delete body.stock;
+          if (old && it.minStock === undefined) body.minStock = old.minStock;
+          if (old && (it.cost === undefined || it.cost === '')) body.cost = old.cost;
+          if (old && (it.iva === undefined || it.iva === '')) body.iva = old.iva;
+          const p = cleanProduct(body, old || undefined);
+          if (!old) { p.id = uid('p'); if (!hasStock) p.stock = 0; all.push(p); created++; } else updated++;
+          await s.put('products', p);
+        } catch (e) { errors.push({ row: i + 2, error: e.message }); }
+      }
+      return { created, updated, errors };
+    });
+    res.json(out);
   }));
   r.post('/products/:id/stock', needAdmin, wrap(async (req, res) => {
     const p = await store.tx(async s => {

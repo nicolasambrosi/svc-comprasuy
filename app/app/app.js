@@ -466,6 +466,56 @@
     toast('Copia de la venta N.º ' + s.number + ' con los precios de hoy. Revisala y guardala.' + (notes.length ? ' Ojo: ' + notes.join('; ') + '.' : ''), !!notes.length);
   }
 
+  // ----- Importar productos (CSV) -----
+  // Acepta las mismas columnas que "Exportar CSV" (Codigo, Nombre, Categoria, Costo, Precio, IVA, Stock, StockMinimo)
+  // y algunos sinónimos. Separador ; , o tabulador; decimales con coma o punto.
+  function parseProductCsv(text) {
+    text = text.replace(/^﻿/, '');
+    var first = text.split(/\r?\n/)[0] || '';
+    var sep = [';', '\t', ','].sort(function (a, b) { return first.split(b).length - first.split(a).length; })[0];
+    var rows = [], row = [], cell = '', q = false;
+    for (var i = 0; i < text.length; i++) {
+      var ch = text[i];
+      if (q) { if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else q = false; } else cell += ch; }
+      else if (ch === '"') q = true;
+      else if (ch === sep) { row.push(cell); cell = ''; }
+      else if (ch === '\n' || ch === '\r') { if (ch === '\r' && text[i + 1] === '\n') i++; row.push(cell); rows.push(row); row = []; cell = ''; }
+      else cell += ch;
+    }
+    if (cell || row.length) { row.push(cell); rows.push(row); }
+    rows = rows.filter(function (r) { return r.some(function (c) { return String(c).trim(); }); });
+    if (rows.length < 2) throw new Error('La planilla está vacía o no tiene encabezados.');
+    var norm = function (s) { return String(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z]/g, ''); };
+    var ALIAS = {
+      code: ['codigo', 'cod', 'sku', 'code', 'articulo'], name: ['nombre', 'producto', 'name', 'detalle'], category: ['categoria', 'rubro', 'category'],
+      description: ['descripcion', 'presentacion'], cost: ['costo', 'cost'], price: ['precio', 'preciodeventa', 'precioconiva', 'unitario', 'price'],
+      iva: ['iva', 'tasaiva'], stock: ['stock', 'cantidad', 'existencia'], minStock: ['stockminimo', 'minimo', 'stockmin']
+    };
+    var head = rows[0].map(norm), col = {};
+    Object.keys(ALIAS).forEach(function (k) { for (var j = 0; j < head.length; j++) if (ALIAS[k].indexOf(head[j]) >= 0) { col[k] = j; break; } });
+    if (col.name == null || col.price == null) throw new Error('La planilla necesita al menos las columnas Nombre y Precio.');
+    var number = function (v) {
+      var s = String(v == null ? '' : v).replace(/[^\d,.\-]/g, '');
+      if (s.indexOf(',') >= 0 && s.indexOf('.') >= 0) s = s.lastIndexOf(',') > s.lastIndexOf('.') ? s.replace(/\./g, '').replace(',', '.') : s.replace(/,/g, '');
+      else if (s.indexOf(',') >= 0) s = s.replace(',', '.');
+      return s;
+    };
+    var items = rows.slice(1).map(function (r) {
+      var get = function (k) { return col[k] == null ? undefined : String(r[col[k]] == null ? '' : r[col[k]]).trim(); };
+      // solo se mandan las columnas que trae la planilla: lo que falta queda como estaba en el producto
+      var it = { code: get('code') || '', name: get('name') || '', price: number(get('price')) };
+      if (col.category != null) it.category = get('category');
+      if (col.description != null) it.description = get('description');
+      if (col.cost != null && get('cost') !== '') it.cost = number(get('cost'));
+      if (col.iva != null && get('iva') !== '') it.iva = number(get('iva')).replace(/\..*$/, '');
+      if (col.stock != null && get('stock') !== '') it.stock = number(get('stock'));
+      if (col.minStock != null && get('minStock') !== '') it.minStock = number(get('minStock'));
+      return it;
+    }).filter(function (it) { return it.name; });
+    if (!items.length) throw new Error('No encontré productos con nombre en la planilla.');
+    return { items: items, hasStock: col.stock != null && items.some(function (it) { return it.stock !== undefined; }) };
+  }
+
   function categories(list) {
     var s = {}; db.products.forEach(function (p) { if (p.category && (!list || listOf(p) === list)) s[p.category] = 1; });
     return Object.keys(s).sort();
@@ -801,7 +851,8 @@
     var adm = isAdmin();
     if (!curList) return listChooser(el, 'Productos', function () { views.productos(el); });
     el.innerHTML = '<div class="head"><h1>Productos</h1>' + listBadge(curList) + '<div class="actions"><button class="btn" id="exp">Exportar CSV</button>' +
-      (adm ? '<button class="btn primary" id="add">+ Nuevo producto</button>' : '') + '</div></div>' +
+      (adm ? '<label class="btn" title="Carga o actualiza productos de esta lista desde una planilla CSV">Importar CSV<input type="file" id="imp" accept=".csv,text/csv,text/plain" hidden></label>' +
+        '<button class="btn primary" id="add">+ Nuevo producto</button>' : '') + '</div></div>' +
       '<div class="toolbar"><input type="search" id="q" placeholder="Buscar producto…"><select id="cat"><option value="">Todas las categorías</option>' +
       categories(curList).map(function (c) { return '<option>' + esc(c) + '</option>'; }).join('') + '</select>' +
       '<select id="lw"><option value="">Todo el stock</option><option value="low">Solo stock bajo</option></select></div><div id="list"></div>';
@@ -824,6 +875,38 @@
     ['q', 'cat', 'lw'].forEach(function (id) { $('#' + id, el).addEventListener('input', draw); });
     $('#chgList', el).addEventListener('click', function () { curList = ''; views.productos(el); });
     if (adm) $('#add', el).addEventListener('click', function () { productModal(null); });
+    if (adm) $('#imp', el).addEventListener('change', function () {
+      var file = this.files[0], input = this; if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function () {
+        input.value = '';
+        var parsed;
+        try { parsed = parseProductCsv(String(reader.result)); } catch (err) { toast(err.message, true); return; }
+        var items = parsed.items, codes = {};
+        db.products.forEach(function (p) { if (listOf(p) === curList && p.code) codes[p.code.toLowerCase()] = 1; });
+        var upd = items.filter(function (it) { return it.code && codes[it.code.toLowerCase()]; }).length;
+        openModal('Importar productos a ' + listName(curList),
+          '<p>La planilla <b>' + esc(file.name) + '</b> tiene <b>' + items.length + '</b> productos: <b>' + (items.length - upd) + '</b> nuevos y <b>' + upd + '</b> que ya están en esta lista (se actualizan por código).</p>' +
+          (parsed.hasStock ? '' : '<p class="muted small">La planilla no trae stock: los productos nuevos quedan con stock 0 y los que ya estaban mantienen el suyo.</p>') +
+          '<div class="tbl-wrap" style="max-height:260px;overflow:auto"><table><thead><tr><th>Código</th><th>Producto</th><th>Categoría</th><th class="num">Precio</th><th class="num">IVA</th>' + (parsed.hasStock ? '<th class="num">Stock</th>' : '') + '</tr></thead><tbody>' +
+          items.slice(0, 200).map(function (it) {
+            return '<tr><td>' + esc(it.code || '') + '</td><td>' + esc(it.name) + '</td><td>' + esc(it.category || '') + '</td><td class="num">' + money(num(it.price)) + '</td><td class="num">' + (it.iva === '' || it.iva == null ? '22' : esc(it.iva)) + '%</td>' + (parsed.hasStock ? '<td class="num">' + esc(it.stock) + '</td>' : '') + '</tr>';
+          }).join('') + '</tbody></table></div>' +
+          '<div class="foot"><button class="btn" data-close>Cancelar</button><button class="btn primary" id="impGo">Importar ' + items.length + ' productos</button></div>',
+          function (m) {
+            $('#impGo', m).addEventListener('click', function () {
+              var b = this; b.disabled = true; b.textContent = 'Importando…';
+              api('POST', '/products/import', { list: curList, items: items }).then(function (r) {
+                return refresh().then(function () {
+                  closeModal(); views.productos(el);
+                  toast(r.created + ' creados, ' + r.updated + ' actualizados' + (r.errors.length ? ' · ' + r.errors.length + ' con error (fila ' + r.errors.map(function (x) { return x.row; }).slice(0, 5).join(', ') + ')' : ''), !!r.errors.length);
+                });
+              }, function (e) { toast(e.message, true); b.disabled = false; b.textContent = 'Importar ' + items.length + ' productos'; });
+            });
+          }, true);
+      };
+      reader.readAsText(file, 'utf-8');
+    });
     $('#list', el).addEventListener('click', function (e) {
       var b = e.target.closest('button'); if (!b) return;
       if (b.dataset.edit) productModal(byId(db.products, b.dataset.edit));
