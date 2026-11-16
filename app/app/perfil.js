@@ -74,7 +74,8 @@
 
   function chipGroup(key, options, selected, multi, addable) {
     var all = options.slice();
-    (selected || []).forEach(function (x) { if (all.indexOf(x) < 0) all.push(x); });
+    // en los grupos de una sola opción (tamaño) "selected" es un texto, no una lista
+    if (multi) (selected || []).forEach(function (x) { if (all.indexOf(x) < 0) all.push(x); });
     return '<div class="pf-group" data-key="' + key + '" data-multi="' + (multi ? 1 : 0) + '"><b class="pf-label">' + esc(LABELS[key]) + '</b><div class="chips">' +
       all.map(function (o) { var v = typeof o === 'string' ? o : o.v, t = typeof o === 'string' ? o : o.t; return '<button type="button" class="chip' + ((multi ? (selected || []).indexOf(v) >= 0 : selected === v) ? ' on' : '') + '" data-v="' + esc(v) + '">' + esc(t) + '</button>'; }).join('') +
       (addable ? '<span class="chip-add"><input type="text" placeholder="Agregar…" maxlength="60" aria-label="Agregar en ' + esc(LABELS[key]) + '"><button type="button" class="btn sm">+</button></span>' : '') +
