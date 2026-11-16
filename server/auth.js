@@ -6,7 +6,8 @@ const store = require('./store');
 const scrypt = promisify(crypto.scrypt);
 const COOKIE = 'svc_session';
 const SESSION_DAYS = 14;
-const ROLES = ['admin', 'supervisor', 'vendedor'];
+// logistica: camiones y rutas de entrega · chofer: sus rutas de reparto (no ven ventas, clientes ni comisiones)
+const ROLES = ['admin', 'supervisor', 'vendedor', 'logistica', 'chofer'];
 
 async function hashPassword(pw) {
   const salt = crypto.randomBytes(16);

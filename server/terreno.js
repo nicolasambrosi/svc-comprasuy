@@ -252,7 +252,7 @@ module.exports = function terreno(r, h) {
       if (paidIn(s)) netBy[s.userId] = (netBy[s.userId] || 0) + (s.subtotal || 0);
       if (s.status === 'pendiente') pendingBy[s.userId] = (pendingBy[s.userId] || 0) + (s.subtotal || 0);
     }
-    return users.filter(u => inScope(sc, u.id)).map(u => {
+    return users.filter(u => inScope(sc, u.id) && ['admin', 'supervisor', 'vendedor'].includes(u.role)).map(u => {
       const pct = u.commissionPct || 0, net = round2(netBy[u.id] || 0);
       let teamNet = 0, teamPct = 0, team = [];
       if (u.role === 'supervisor') {

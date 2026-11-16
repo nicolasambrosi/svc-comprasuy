@@ -80,6 +80,8 @@ async function sellerIdFrom(v) {
 
 module.exports = function api() {
   const r = express.Router();
+  // server/entregas.js agrega acá cleanDelivery (lo usa la alta de ventas)
+  const deliveryHelpers = { wrap, needUser, fail, str, uid, scopeOf, canSeeSale };
   r.use(express.json({ limit: '20mb' }));
   // Las escrituras solo aceptan JSON (protege contra formularios de otros sitios).
   r.use((req, _res, next) => (!['POST', 'PUT', 'PATCH'].includes(req.method) || req.is('application/json') ? next() : next(new HttpError(415, 'Se esperaba JSON.'))));
@@ -110,10 +112,19 @@ module.exports = function api() {
   // ---------- todos los datos visibles para el usuario ----------
   r.get('/data', needUser, wrap(async (req, res) => {
     const sc = await scopeOf(req.user);
-    const [products, clients, sales, settings, users, zones] = await Promise.all([
-      store.all('products'), store.all('clients'), store.all('sales'), getSettings(), store.all('users'), store.all('zones')
+    const [products, clients, sales, settings, users, zones, trucks] = await Promise.all([
+      store.all('products'), store.all('clients'), store.all('sales'), getSettings(), store.all('users'), store.all('zones'), store.all('trucks')
     ]);
+    // logística y choferes trabajan con sus pantallas de entregas: no reciben ventas, clientes ni productos
+    if (req.user.role === 'logistica' || req.user.role === 'chofer') {
+      return res.json({
+        me: auth.publicUser(req.user), settings: { company: settings.company, depot: settings.depot || null }, products: [], clients: [], sales: [],
+        users: req.user.role === 'logistica' ? users.filter(u => u.role === 'chofer').map(auth.publicUser) : [],
+        zones: [], trucks, storage: store.kind
+      });
+    }
     res.json({
+      trucks: trucks.filter(t => t.active !== false).map(t => ({ id: t.id, name: t.name, plate: t.plate, active: t.active !== false })),
       me: auth.publicUser(req.user), settings, products: products.filter(p => canSeeList(req.user, p.list)), clients: clients.filter(c => canSeeClient(sc, c)),
       sales: sales.filter(s => canSeeSale(sc, s) && canSeeList(req.user, s.list)),
       // admin: todos; supervisor: su equipo; vendedor: nadie más
@@ -290,7 +301,10 @@ module.exports = function api() {
     if (status === 'pendiente' && !client) fail(400, 'Elegí un cliente para dejar la venta pendiente de cobro.');
     if (!LISTS.includes(b.list)) fail(400, 'Elegí si la venta es para un comercio o una institución.');
     if (!canSeeList(req.user, b.list)) fail(403, 'Solo un administrador puede vender con esa lista.');
+    if (req.user.role === 'logistica' || req.user.role === 'chofer') fail(403, 'Tu usuario no hace ventas.');
     const list = b.list;
+    const delivery = await deliveryHelpers.cleanDelivery(b.delivery);
+    if (delivery && !client) fail(400, 'Para programar una entrega elegí el cliente.');
 
     const sale = await store.tx(async s => {
       const settings = await getSettings(s);
@@ -314,6 +328,7 @@ module.exports = function api() {
         userId: req.user.id, userName: req.user.name
       }, calcSale(items, discountPct));
       if (PAID.includes(status)) sale.paidAt = sale.date;
+      if (delivery) sale.delivery = delivery;
       settings.nextNumber++;
       for (const p of products) await s.put('products', p);
       await s.put('settings', settings);
@@ -457,6 +472,7 @@ module.exports = function api() {
     res.json(out);
   }));
 
+  require('./entregas')(r, deliveryHelpers);
   require('./terreno')(r, { wrap, needUser, needAdmin, fail, str, int, uid, getSettings, PAID });
   require('./prospectos')(r, { wrap, needUser, fail, str, uid });
 

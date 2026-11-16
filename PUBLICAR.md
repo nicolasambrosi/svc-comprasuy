@@ -97,6 +97,21 @@ En Comisiones, un administrador registra los pagos de cada comisión aprobada (m
 haber pagos parciales). Se guardan en la colección `compays`. El vendedor ve los pagos de su comisión. No se puede quitar
 la aprobación de una comisión que ya tiene pagos (primero se borran los pagos).
 
+### Entregas (logística y choferes)
+
+Roles nuevos: **Logística** (camiones, rutas de entrega y estadísticas) y **Chofer** (Mis entregas). Ninguno de los dos ve
+ventas, clientes, productos ni comisiones fuera de sus pantallas.
+
+- Cada venta puede llevar entrega: día, turno (mañana/tarde) y camión (o "lo asigna Logística"). Con cliente se programa
+  sola para el próximo día hábil. Se cambia desde el comprobante ("Cambiar entrega").
+- Logística (menú Logística) elige día y turno, reparte las entregas entre camiones, junta las ventas del mismo cliente en
+  una parada, ordena con "Armar mejor ruta" (vecino más cercano + 2-opt desde el depósito) y guarda: el chofer la recibe.
+- El chofer (Mis entregas) toca "Empezar ruta" (aviso "en camino" al vendedor y a los administradores), marca cada
+  parada entregada (y el cobro: la venta pendiente pasa a cobrada) o no entregada (vuelve a pendiente para reprogramar).
+- Km: GPS del celular del chofer mientras la ruta está en curso (si no hubo GPS, la estimación de la ruta). Tiempo: de
+  "Empezar ruta" a la última parada. Promedios por camión en Logística → Kilómetros y tiempos.
+- Avisos (🔔 en el menú): dentro del sistema, se revisan cada minuto. Colecciones: `trucks`, `delivroutes`, `notices`.
+
 ## 2b. Ventas en terreno (web, pensado para tablet)
 
 | Pantalla | Quién | Qué hace |

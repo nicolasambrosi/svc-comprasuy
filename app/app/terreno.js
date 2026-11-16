@@ -39,7 +39,7 @@
   }
   function isBoss() { return S.isBoss(); }
   function teamUsers() { // usuarios que puede supervisar (incluido él mismo: el supervisor también vende)
-    var me = db().me, list = db().users.filter(function (u) { return u.active; });
+    var me = db().me, list = db().users.filter(function (u) { return u.active && ['admin', 'supervisor', 'vendedor'].indexOf(u.role) >= 0; });
     if (!list.some(function (u) { return u.id === me.id; })) list.unshift(me);
     return list.sort(function (a, b) { return a.name.localeCompare(b.name); });
   }
