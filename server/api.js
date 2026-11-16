@@ -51,7 +51,10 @@ function cleanClient(b, old) {
 const pct = v => Math.min(Math.max(round2(num(v)), 0), 100);
 async function userExtras(b, old) {
   const o = {};
-  if (b.zoneId !== undefined) { o.zoneId = str(b.zoneId, 90); if (o.zoneId && !(await store.get('zones', o.zoneId))) fail(400, 'La zona elegida no existe.'); }
+  if (b.supervisorId !== undefined) {
+    o.supervisorId = str(b.supervisorId, 90);
+    if (o.supervisorId) { const s = await store.get('users', o.supervisorId); if (!s || s.role !== 'supervisor') fail(400, 'Elegí un supervisor válido.'); }
+  }
   if (b.commissionPct !== undefined) o.commissionPct = pct(b.commissionPct);
   if (b.teamCommissionPct !== undefined) o.teamCommissionPct = pct(b.teamCommissionPct);
   return o;
@@ -320,6 +323,8 @@ module.exports = function api() {
       active: b.active !== false, passwordHash: await auth.hashPassword(b.password), createdAt: new Date().toISOString()
     };
     Object.assign(u, await userExtras(b));
+    if (u.role !== 'vendedor') u.supervisorId = ''; // solo los vendedores tienen supervisor
+    else if (u.supervisorId === undefined) u.supervisorId = '';
     await store.put('users', u);
     res.json(auth.publicUser(u));
   }));
@@ -331,7 +336,12 @@ module.exports = function api() {
     if (other && other.id !== u.id) fail(409, 'Ya existe un usuario con ese email.');
     const role = auth.ROLES.includes(b.role) ? b.role : u.role, active = b.active !== false;
     await checkAdminsLeft(u.id, role === 'admin' && active);
+    if (u.role === 'supervisor' && role !== 'supervisor') {
+      const team = (await store.all('users')).filter(x => x.supervisorId === u.id);
+      if (team.length) fail(400, u.name + ' tiene ' + team.length + ' vendedor' + (team.length > 1 ? 'es' : '') + ' a cargo (' + team.map(x => x.name).slice(0, 3).join(', ') + '). Asignales otro supervisor antes de cambiarle el rol.');
+    }
     Object.assign(u, { name: str(b.name, 100) || email, email, role, active }, await userExtras(b, u));
+    if (u.role !== 'vendedor') u.supervisorId = '';
     if (b.password) { const err = auth.passwordError(b.password); if (err) fail(400, err); u.passwordHash = await auth.hashPassword(b.password); }
     await store.put('users', u);
     res.json(auth.publicUser(u));
@@ -341,6 +351,7 @@ module.exports = function api() {
     await checkAdminsLeft(req.params.id, false);
     await store.del('users', req.params.id);
     for (const z of await store.all('zones')) if (z.supervisorId === req.params.id) { z.supervisorId = ''; await store.put('zones', z); }
+    for (const x of await store.all('users')) if (x.supervisorId === req.params.id) { x.supervisorId = ''; await store.put('users', x); } // vendedores sin supervisor
     for (const c of await store.all('clients')) if (c.sellerId === req.params.id) { c.sellerId = ''; await store.put('clients', c); } // quedan sin asignar
     for (const x of await store.all('recorridos')) if (x.sellerId === req.params.id) { x.sellerId = ''; await store.put('recorridos', x); }
     res.json({ ok: true });

@@ -54,7 +54,6 @@ module.exports = function terreno(r, h) {
     if (recs.length) fail(400, 'La zona tiene ' + recs.length + ' recorrido' + (recs.length > 1 ? 's' : '') + '. Borralos o pasalos a otra zona primero.');
     await store.del('zones', req.params.id);
     for (const c of await store.all('clients')) if (c.zoneId === req.params.id) { c.zoneId = ''; await store.put('clients', c); }
-    for (const u of await store.all('users')) if (u.zoneId === req.params.id) { u.zoneId = ''; await store.put('users', u); }
     res.json({ ok: true });
   }));
 
@@ -249,8 +248,7 @@ module.exports = function terreno(r, h) {
       const pct = u.commissionPct || 0, net = round2(netBy[u.id] || 0);
       let teamNet = 0, teamPct = 0, team = [];
       if (u.role === 'supervisor') {
-        const zs = zones.filter(z => z.supervisorId === u.id).map(z => z.id);
-        team = users.filter(x => x.id !== u.id && x.zoneId && zs.includes(x.zoneId));
+        team = users.filter(x => x.id !== u.id && x.supervisorId === u.id);
         teamNet = round2(team.reduce((a, x) => a + (netBy[x.id] || 0), 0));
         teamPct = u.teamCommissionPct || 0;
       }

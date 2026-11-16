@@ -29,7 +29,7 @@ const normEmail = e => (typeof e === 'string' ? e.trim().toLowerCase() : '');
 const validEmail = e => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e);
 const publicUser = u => u && ({
   id: u.id, name: u.name, email: u.email, role: u.role, active: u.active !== false, createdAt: u.createdAt,
-  zoneId: u.zoneId || '', commissionPct: u.commissionPct || 0, teamCommissionPct: u.teamCommissionPct || 0
+  zoneId: u.zoneId || '', supervisorId: u.supervisorId || '', commissionPct: u.commissionPct || 0, teamCommissionPct: u.teamCommissionPct || 0
 });
 
 async function findByEmail(email) {

@@ -618,7 +618,7 @@
     if (!comMonth) comMonth = today().slice(0, 7);
     el.innerHTML = '<div class="head"><h1>Comisiones</h1><div class="actions"><input type="month" id="cm" value="' + comMonth + '">' + (isBoss() ? '<button class="btn" id="cExp">Exportar CSV</button>' : '') + '</div></div>' +
       '<p class="muted small">Se calculan sobre el <b>neto</b> (sin IVA y con el descuento aplicado) de las ventas <b>cobradas</b> en el mes: estado pagada o entregada, según la fecha de cobro. Las ventas pendientes de cobro todavía no suman.' +
-      (isBoss() ? ' El supervisor cobra además un % sobre lo cobrado por los vendedores de sus zonas. Cada vendedor ve su comisión cuando la aprobás.' : ' Ves tu comisión cuando tu supervisor la aprueba.') + '</p><div id="cBody"><div class="loading">Cargando…</div></div>';
+      (isBoss() ? ' El supervisor cobra además un % sobre lo cobrado por los vendedores que tiene a cargo. Cada vendedor ve su comisión cuando la aprobás.' : ' Ves tu comisión cuando tu supervisor la aprueba.') + '</p><div id="cBody"><div class="loading">Cargando…</div></div>';
     var rows = [];
     function load() {
       api('GET', '/commissions?month=' + comMonth).then(function (r) { rows = r; if (alive(el, 'comisiones')) draw(); }, function (e) { $('#cBody', el).innerHTML = '<div class="card empty">' + esc(e.message) + '</div>'; });
@@ -695,10 +695,10 @@
     });
     box.innerHTML = '<div class="grid half" style="margin-bottom:16px">' +
       '<div class="card"><div class="head" style="margin-bottom:10px"><h2 style="margin:0">Zonas</h2><button class="btn primary sm" id="zAdd">+ Nueva zona</button></div>' +
-      '<p class="muted small">Cada zona tiene un supervisor. El supervisor ve, arma rutas y aprueba comisiones de los usuarios de sus zonas (la zona de cada vendedor se elige en Usuarios → Editar).</p>' +
-      (zones.length ? '<div class="tbl-wrap"><table><thead><tr><th>Zona</th><th>Supervisor</th><th class="num">Usuarios</th><th></th></tr></thead><tbody>' + zones.slice().sort(function (a, b) { return a.name.localeCompare(b.name); }).map(function (z) {
+      '<p class="muted small">Las zonas agrupan comercios para armar recorridos. El supervisor de la zona maneja sus comercios y recorridos. A quién supervisa cada vendedor se elige en Usuarios → Editar → Supervisor.</p>' +
+      (zones.length ? '<div class="tbl-wrap"><table><thead><tr><th>Zona</th><th>Supervisor</th><th class="num">Comercios</th><th></th></tr></thead><tbody>' + zones.slice().sort(function (a, b) { return a.name.localeCompare(b.name); }).map(function (z) {
         var s = byId(users, z.supervisorId);
-        return '<tr><td><b>' + esc(z.name) + '</b></td><td>' + (s ? esc(s.name) : '<span class="muted">Sin supervisor</span>') + '</td><td class="num">' + users.filter(function (u) { return u.zoneId === z.id; }).length + '</td>' +
+        return '<tr><td><b>' + esc(z.name) + '</b></td><td>' + (s ? esc(s.name) : '<span class="muted">Sin supervisor</span>') + '</td><td class="num">' + db().clients.filter(function (c) { return c.zoneId === z.id; }).length + '</td>' +
           '<td class="act"><button class="btn sm" data-zed="' + z.id + '">Editar</button><button class="btn sm danger" data-zdel="' + z.id + '">Borrar</button></td></tr>';
       }).join('') + '</tbody></table></div>' : '<p class="muted">Todavía no hay zonas.</p>') + '</div>' +
       '<div class="card"><h2>Ubicación de clientes en el mapa</h2>' +

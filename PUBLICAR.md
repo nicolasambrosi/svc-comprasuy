@@ -70,9 +70,12 @@ Cada cliente tiene un **vendedor asignado** (campo `sellerId` en la base). El cl
 los que crea un administrador quedan sin asignar salvo que elija uno. Los clientes sin asignar solo los ven los administradores.
 Si se borra un usuario, sus clientes quedan sin asignar.
 
-**Supervisor** (rol nuevo): vende como un vendedor y además ve los clientes, ventas, rutas y visitas de los usuarios de
-**sus zonas**, les arma las rutas y les aprueba la comisión. Las zonas se crean en Configuración → Zonas (cada una con su
-supervisor) y la zona de cada vendedor se elige en Usuarios → Editar.
+**Supervisor** (rol nuevo): vende como un vendedor y además ve los clientes, ventas, rutas y visitas de **los vendedores
+que tiene a cargo**, les arma las rutas y les aprueba la comisión. Cada vendedor tiene **un supervisor** (Usuarios → Editar
+→ Supervisor; campo `supervisorId`). Las **zonas** (Configuración → Zonas, cada una con su supervisor) agrupan comercios:
+el supervisor de una zona maneja sus comercios y recorridos, aunque los visite un vendedor de otro supervisor.
+Al pasar a este esquema, cada vendedor tomó como supervisor al de la zona que tenía cargada.
+Un supervisor con vendedores a cargo no puede cambiar de rol hasta que se les asigne otro; si se lo borra, quedan sin supervisor.
 
 Siempre tiene que quedar al menos un administrador activo. Tras 8 intentos fallidos de clave, ese email queda bloqueado 15 minutos.
 
@@ -105,7 +108,6 @@ Siempre tiene que quedar al menos un administrador activo. Tras 8 intentos falli
   (el servidor público de OpenStreetMap a veces está saturado; se reintenta con otro). No están todos los comercios y casi
   nunca traen teléfono. **No se usa Google Maps**: sus condiciones no permiten copiar ni guardar sus comercios.
   En Clientes, el filtro "Solo prospectos" los lista.
-  La zona de un **usuario** (Usuarios → Editar) sigue indicando qué supervisor tiene a cargo a ese vendedor.
 - **GPS**: el check-in vale si el vendedor está a menos del radio (Configuración, 100 m por defecto) del comercio.
   Si está lejos o sin GPS **se registra igual** y queda marcado para el supervisor (no bloquea). Requiere HTTPS y que el
   navegador tenga permiso de ubicación. Recomendado: tablets con GPS (con chip de datos); las solo-WiFi ubican mal en la calle.

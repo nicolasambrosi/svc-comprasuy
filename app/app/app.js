@@ -1001,15 +1001,15 @@
     return [
       { name: 'name', label: 'Nombre', req: true, full: true },
       { name: 'email', label: 'Email (para entrar)', type: 'email', req: true, auto: 'off' },
-      { name: 'role', label: 'Rol', type: 'select', options: [{ v: 'vendedor', t: 'Vendedor' }, { v: 'supervisor', t: 'Supervisor (vende y supervisa sus zonas)' }, { v: 'admin', t: 'Administrador' }], def: 'vendedor' },
-      { name: 'zoneId', label: 'Zona (para vendedores)', type: 'select', options: [{ v: '', t: 'Sin zona' }].concat((db.zones || []).map(function (z) { return { v: z.id, t: z.name }; })), def: '' },
+      { name: 'role', label: 'Rol', type: 'select', options: [{ v: 'vendedor', t: 'Vendedor' }, { v: 'supervisor', t: 'Supervisor (vende y supervisa a sus vendedores)' }, { v: 'admin', t: 'Administrador' }], def: 'vendedor' },
+      { name: 'supervisorId', label: 'Supervisor (solo vendedores)', type: 'select', options: [{ v: '', t: 'Sin supervisor' }].concat(db.users.filter(function (u) { return u.role === 'supervisor'; }).sort(function (a, b) { return a.name.localeCompare(b.name); }).map(function (u) { return { v: u.id, t: u.name + (u.active ? '' : ' (inactivo)') }; })), def: '' },
       { name: 'commissionPct', label: 'Comisión sobre sus ventas cobradas (%)', type: 'number', def: 0 },
       { name: 'teamCommissionPct', label: 'Comisión sobre su equipo (% · solo supervisores)', type: 'number', def: 0 },
       { name: 'password', label: isNew ? 'Contraseña (mín. 8 caracteres)' : 'Nueva contraseña (dejá vacío para no cambiarla)', type: 'password', req: isNew, auto: 'new-password' },
       { name: 'active', label: 'Estado', type: 'select', options: [{ v: '1', t: 'Activo' }, { v: '0', t: 'Inactivo (no puede entrar)' }], def: '1' }
     ];
   };
-  function userBody(o) { return { name: o.name, email: o.email, role: o.role, password: o.password || undefined, active: o.active !== '0', zoneId: o.zoneId, commissionPct: o.commissionPct, teamCommissionPct: o.teamCommissionPct }; }
+  function userBody(o) { return { name: o.name, email: o.email, role: o.role, password: o.password || undefined, active: o.active !== '0', supervisorId: o.role === 'vendedor' ? o.supervisorId : '', commissionPct: o.commissionPct, teamCommissionPct: o.teamCommissionPct }; }
 
   function passwordCard() {
     return '<div class="card"><h2>Mi contraseña</h2><p class="muted small">Entraste como <b>' + esc(db.me.email) + '</b> (' + ROLE_NAMES[db.me.role] + ').</p>' +
@@ -1053,12 +1053,13 @@
     el.innerHTML = '<div class="head"><h1>Configuración</h1></div>' +
       '<div id="terrenoCfg"></div>' +
       '<div class="card" style="margin-bottom:16px"><div class="head" style="margin-bottom:10px"><h2 style="margin:0">Usuarios</h2><button class="btn primary" id="addUser">+ Nuevo usuario</button></div>' +
-      '<p class="muted small">Los <b>administradores</b> ven y manejan todo. Los <b>supervisores</b> venden y además ven, arman rutas y aprueban comisiones de los vendedores de sus zonas. Los <b>vendedores</b> solo ven sus ventas y los clientes asignados a ellos (se asignan en Clientes).</p>' +
-      '<div class="tbl-wrap"><table><thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Zona</th><th class="num">Comisión</th><th>Estado</th><th class="num">Clientes</th><th class="num">Ventas</th><th></th></tr></thead><tbody>' +
+      '<p class="muted small">Los <b>administradores</b> ven y manejan todo. Los <b>supervisores</b> venden y además ven, arman rutas y aprueban comisiones de los vendedores que tienen a cargo (cada vendedor tiene su supervisor) y manejan los comercios de sus zonas. Los <b>vendedores</b> solo ven sus ventas y los clientes asignados a ellos (se asignan en Clientes).</p>' +
+      '<div class="tbl-wrap"><table><thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Supervisor</th><th class="num">Comisión</th><th>Estado</th><th class="num">Clientes</th><th class="num">Ventas</th><th></th></tr></thead><tbody>' +
       db.users.slice().sort(function (a, b) { return a.name.localeCompare(b.name); }).map(function (u) {
         var n = db.sales.filter(function (s) { return s.userId === u.id && s.status !== 'anulada'; }).length;
         return '<tr><td><b>' + esc(u.name) + '</b>' + (u.id === db.me.id ? ' <span class="pill">vos</span>' : '') + '</td><td>' + esc(u.email) + '</td><td>' + ROLE_NAMES[u.role] + '</td>' +
-          '<td>' + esc((byId(db.zones || [], u.zoneId) || {}).name || '—') + '</td><td class="num">' + (u.commissionPct || 0) + '%' + (u.role === 'supervisor' ? ' + ' + (u.teamCommissionPct || 0) + '% equipo' : '') + '</td>' +
+          '<td>' + (u.role === 'vendedor' ? (u.supervisorId ? esc((byId(db.users, u.supervisorId) || {}).name || '—') : '<span class="muted">Sin supervisor</span>') :
+            u.role === 'supervisor' ? '<span class="muted small">' + db.users.filter(function (x) { return x.supervisorId === u.id; }).length + ' a cargo</span>' : '—') + '</td><td class="num">' + (u.commissionPct || 0) + '%' + (u.role === 'supervisor' ? ' + ' + (u.teamCommissionPct || 0) + '% equipo' : '') + '</td>' +
           '<td>' + (u.active ? '<span class="pill pagada">activo</span>' : '<span class="pill anulada">inactivo</span>') + '</td><td class="num">' + db.clients.filter(function (c) { return c.sellerId === u.id; }).length + '</td><td class="num">' + n + '</td>' +
           '<td class="act"><button class="btn sm" data-uedit="' + u.id + '">Editar</button>' + (u.id === db.me.id ? '' : '<button class="btn sm danger" data-udel="' + u.id + '">Borrar</button>') + '</td></tr>';
       }).join('') + '</tbody></table></div></div>' +
@@ -1085,7 +1086,7 @@
     $$('[data-uedit]', el).forEach(function (b) {
       b.addEventListener('click', function () {
         var u = byId(db.users, b.dataset.uedit);
-        formModal('Editar usuario', userFields(false), { name: u.name, email: u.email, role: u.role, active: u.active ? '1' : '0', zoneId: u.zoneId || '', commissionPct: u.commissionPct || 0, teamCommissionPct: u.teamCommissionPct || 0 },
+        formModal('Editar usuario', userFields(false), { name: u.name, email: u.email, role: u.role, active: u.active ? '1' : '0', supervisorId: u.supervisorId || '', commissionPct: u.commissionPct || 0, teamCommissionPct: u.teamCommissionPct || 0 },
           function (o) { return act(api('PUT', '/users/' + u.id, userBody(o)), 'Usuario actualizado'); });
       });
     });
