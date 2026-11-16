@@ -489,7 +489,8 @@
     var ALIAS = {
       code: ['codigo', 'cod', 'sku', 'code', 'articulo'], name: ['nombre', 'producto', 'name', 'detalle'], category: ['categoria', 'rubro', 'category'],
       description: ['descripcion', 'presentacion'], cost: ['costo', 'cost'], price: ['precio', 'preciodeventa', 'precioconiva', 'unitario', 'price'],
-      iva: ['iva', 'tasaiva'], stock: ['stock', 'cantidad', 'existencia'], minStock: ['stockminimo', 'minimo', 'stockmin']
+      iva: ['iva', 'tasaiva'], stock: ['stock', 'cantidad', 'existencia'], minStock: ['stockminimo', 'minimo', 'stockmin'],
+      image: ['imagen', 'foto', 'image', 'urlimagen', 'imagenurl']
     };
     var head = rows[0].map(norm), col = {};
     Object.keys(ALIAS).forEach(function (k) { for (var j = 0; j < head.length; j++) if (ALIAS[k].indexOf(head[j]) >= 0) { col[k] = j; break; } });
@@ -510,6 +511,7 @@
       if (col.iva != null && get('iva') !== '') it.iva = number(get('iva')).replace(/\..*$/, '');
       if (col.stock != null && get('stock') !== '') it.stock = number(get('stock'));
       if (col.minStock != null && get('minStock') !== '') it.minStock = number(get('minStock'));
+      if (col.image != null && /^https:\/\//i.test(get('image'))) it.imageUrl = get('image');
       return it;
     }).filter(function (it) { return it.name; });
     if (!items.length) throw new Error('No encontré productos con nombre en la planilla.');
@@ -887,6 +889,7 @@
         var upd = items.filter(function (it) { return it.code && codes[it.code.toLowerCase()]; }).length;
         openModal('Importar productos a ' + listName(curList),
           '<p>La planilla <b>' + esc(file.name) + '</b> tiene <b>' + items.length + '</b> productos: <b>' + (items.length - upd) + '</b> nuevos y <b>' + upd + '</b> que ya están en esta lista (se actualizan por código).</p>' +
+          (items.some(function (it) { return it.imageUrl; }) ? '<p class="muted small">' + items.filter(function (it) { return it.imageUrl; }).length + ' traen imagen: se bajan y se les ponen después de importar (puede tardar un minuto).</p>' : '') +
           (parsed.hasStock ? '' : '<p class="muted small">La planilla no trae stock: los productos nuevos quedan con stock 0 y los que ya estaban mantienen el suyo.</p>') +
           '<div class="tbl-wrap" style="max-height:260px;overflow:auto"><table><thead><tr><th>Código</th><th>Producto</th><th>Categoría</th><th class="num">Precio</th><th class="num">IVA</th>' + (parsed.hasStock ? '<th class="num">Stock</th>' : '') + '</tr></thead><tbody>' +
           items.slice(0, 200).map(function (it) {
@@ -896,10 +899,26 @@
           function (m) {
             $('#impGo', m).addEventListener('click', function () {
               var b = this; b.disabled = true; b.textContent = 'Importando…';
-              api('POST', '/products/import', { list: curList, items: items }).then(function (r) {
-                return refresh().then(function () {
+              var send = items.map(function (it) { var o = Object.assign({}, it); delete o.imageUrl; return o; });
+              api('POST', '/products/import', { list: curList, items: send }).then(function (r) {
+                var msg = r.created + ' creados, ' + r.updated + ' actualizados' + (r.errors.length ? ' · ' + r.errors.length + ' con error (fila ' + r.errors.map(function (x) { return x.row; }).slice(0, 5).join(', ') + ')' : '');
+                // imágenes: se bajan por el servidor, se achican acá y se suben a cada producto
+                var jobs = items.map(function (it, i) { return { url: it.imageUrl, id: (r.ids || [])[i] }; }).filter(function (j) { return j.url && j.id; });
+                var okImg = 0, badImg = 0, n = 0;
+                var next = function () {
+                  if (n >= jobs.length) return Promise.resolve();
+                  var j = jobs[n++]; b.textContent = 'Imágenes ' + n + ' de ' + jobs.length + '…';
+                  return fetch('/api/images/fetch?url=' + encodeURIComponent(j.url), { credentials: 'same-origin' })
+                    .then(function (res) { if (!res.ok) throw new Error('img'); return res.blob(); })
+                    .then(function (blob) { return shrinkImage(new File([blob], 'img', { type: blob.type })); })
+                    .then(function (dataUrl) { return api('PUT', '/products/' + j.id + '/image', { dataUrl: dataUrl }); })
+                    .then(function () { okImg++; }, function () { badImg++; })
+                    .then(next);
+                };
+                return next().then(function () { return refresh(); }).then(function () {
                   closeModal(); views.productos(el);
-                  toast(r.created + ' creados, ' + r.updated + ' actualizados' + (r.errors.length ? ' · ' + r.errors.length + ' con error (fila ' + r.errors.map(function (x) { return x.row; }).slice(0, 5).join(', ') + ')' : ''), !!r.errors.length);
+                  if (jobs.length) msg += ' · ' + okImg + ' imágenes' + (badImg ? ' (' + badImg + ' no se pudieron bajar)' : '');
+                  toast(msg, !!(r.errors.length || badImg));
                 });
               }, function (e) { toast(e.message, true); b.disabled = false; b.textContent = 'Importar ' + items.length + ' productos'; });
             });

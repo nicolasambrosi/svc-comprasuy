@@ -148,7 +148,7 @@ module.exports = function api() {
     if (!items.length) fail(400, 'La planilla no tiene productos.');
     const out = await store.tx(async s => {
       const all = await s.all('products');
-      let created = 0, updated = 0; const errors = [];
+      let created = 0, updated = 0; const errors = [], ids = [];
       for (let i = 0; i < items.length; i++) {
         const it = items[i] || {};
         try {
@@ -163,11 +163,27 @@ module.exports = function api() {
           const p = cleanProduct(body, old || undefined);
           if (!old) { p.id = uid('p'); if (!hasStock) p.stock = 0; all.push(p); created++; } else updated++;
           await s.put('products', p);
+          ids[i] = p.id;
         } catch (e) { errors.push({ row: i + 2, error: e.message }); }
       }
-      return { created, updated, errors };
+      return { created, updated, errors, ids };
     });
     res.json(out);
+  }));
+  // Trae una imagen de otro sitio (columna Imagen de la planilla) para que el navegador la achique y la suba.
+  // Solo administradores, solo https y solo imágenes de hasta 8 MB.
+  r.get('/images/fetch', needAdmin, wrap(async (req, res) => {
+    let u; try { u = new URL(String(req.query.url || '')); } catch (e) { fail(400, 'Dirección de imagen inválida.'); }
+    if (u.protocol !== 'https:') fail(400, 'La imagen tiene que estar en una dirección https.');
+    if (/^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|0\.|169\.254\.|\[)/i.test(u.hostname)) fail(400, 'Dirección no permitida.');
+    let r2;
+    try { r2 = await fetch(u, { redirect: 'follow', signal: AbortSignal.timeout(15000), headers: { 'User-Agent': 'Mozilla/5.0 (SVC)' } }); }
+    catch (e) { fail(502, 'No se pudo bajar la imagen.'); }
+    const type = (r2.headers.get('content-type') || '').split(';')[0].trim();
+    if (!r2.ok || !/^image\/(jpeg|png|webp|gif)$/.test(type)) fail(502, 'Esa dirección no devolvió una imagen (' + r2.status + ').');
+    const buf = Buffer.from(await r2.arrayBuffer());
+    if (buf.length > 8 * 1024 * 1024) fail(413, 'La imagen pesa más de 8 MB.');
+    res.set('Cache-Control', 'no-store').type(type).send(buf);
   }));
   r.post('/products/:id/stock', needAdmin, wrap(async (req, res) => {
     const p = await store.tx(async s => {
