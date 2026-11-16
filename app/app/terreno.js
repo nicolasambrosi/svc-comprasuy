@@ -362,7 +362,7 @@
   // ======================================================================
   // RUTAS: el supervisor arma la ruta de cada vendedor por día
   // ======================================================================
-  var rutaSel = { sellerId: '', date: '' };
+  var rutaSel = { sellerId: '', date: '', zoneId: '' };
   S.views.rutas = function (el) {
     if (!isBoss()) { el.innerHTML = '<div class="card empty">Solo supervisores y administradores.</div>'; return; }
     var users = teamUsers();
@@ -376,7 +376,11 @@
       '<div class="week" id="week"></div>' +
       '<div class="rutas">' +
       '<div class="card"><h2>Clientes</h2><div class="toolbar"><input type="search" id="cq" placeholder="Buscar cliente o dirección…">' +
-      '<select id="cscope"><option value="">Asignados a este vendedor</option><option value="all">Todos los de mi equipo</option></select>' +
+      '<select id="cscope"><option value="">Asignados a este vendedor</option><option value="all">Todos los de mi equipo y mis zonas</option></select>' +
+      '<select id="czone"><option value="">Todas las zonas</option><option value="-"' + (rutaSel.zoneId === '-' ? ' selected' : '') + '>Sin zona</option>' +
+      (db().zones || []).filter(function (z) { return db().clients.some(function (c) { return c.zoneId === z.id; }); })
+        .sort(function (a, b) { return a.name.localeCompare(b.name); })
+        .map(function (z) { return '<option value="' + z.id + '"' + (z.id === rutaSel.zoneId ? ' selected' : '') + '>' + esc(z.name) + '</option>'; }).join('') + '</select>' +
       '<select id="csort"><option value="name">Por nombre</option><option value="last">Sin comprar hace más tiempo</option><option value="debt">Con saldo pendiente</option></select></div>' +
       '<div id="clist" class="pick-list tall"></div></div>' +
       '<div class="card"><div class="head" style="margin-bottom:8px"><h2 style="margin:0" id="rTitle"></h2>' +
@@ -392,18 +396,21 @@
     function lastBuy(c) { var d = ''; db().sales.forEach(function (s) { if (s.clientId === c.id && s.status !== 'anulada' && s.date > d) d = s.date; }); return d; }
     function debtOf(c) { return db().sales.filter(function (s) { return s.clientId === c.id && s.status === 'pendiente'; }).reduce(function (a, s) { return a + s.total; }, 0); }
     function drawClients() {
-      var q = $('#cq', el).value.toLowerCase(), sort = $('#csort', el).value;
+      var q = $('#cq', el).value.toLowerCase(), sort = $('#csort', el).value, zf = $('#czone', el).value;
       var list = db().clients.filter(function (c) {
-        return (scopeAll || c.sellerId === rutaSel.sellerId) && stops.indexOf(c.id) < 0 && (!q || (c.name + ' ' + c.address + ' ' + c.doc).toLowerCase().indexOf(q) >= 0) && (sort !== 'debt' || debtOf(c) > 0);
+        return (scopeAll || c.sellerId === rutaSel.sellerId) && (!zf || (zf === '-' ? !c.zoneId : c.zoneId === zf)) && stops.indexOf(c.id) < 0 && (!q || (c.name + ' ' + c.address + ' ' + c.doc).toLowerCase().indexOf(q) >= 0) && (sort !== 'debt' || debtOf(c) > 0);
       }).map(function (c) { return { c: c, last: lastBuy(c) }; });
       list.sort(sort === 'last' ? function (a, b) { return a.last.localeCompare(b.last) || a.c.name.localeCompare(b.c.name); } : function (a, b) { return a.c.name.localeCompare(b.c.name); });
       var mine = db().clients.filter(function (c) { return c.sellerId === rutaSel.sellerId; }).length;
       $('#clist', el).innerHTML = (list.length ? list.slice(0, 150).map(function (x) {
         var days = x.last ? Math.floor((Date.now() - Date.parse(x.last)) / 864e5) : null;
-        return '<button type="button" class="pick" data-add="' + x.c.id + '"><b>' + esc(x.c.name) + '</b><span class="muted small">' + esc(x.c.address || 'Sin dirección') +
+        var zn = !zf && x.c.zoneId ? (byId(db().zones || [], x.c.zoneId) || {}).name : '';
+        return '<button type="button" class="pick" data-add="' + x.c.id + '"><b>' + esc(x.c.name) + '</b><span class="muted small">' + esc(x.c.address || 'Sin dirección') + (zn ? ' · zona ' + esc(zn) : '') +
+          (scopeAll && x.c.sellerId !== rutaSel.sellerId ? ' · ' + (x.c.sellerId ? esc((byId(users, x.c.sellerId) || {}).name || 'otro vendedor') : 'sin vendedor') : '') +
           ' · ' + (days == null ? 'nunca compró' : 'última compra hace ' + days + ' d') + (hasGeo(x.c) ? '' : ' · sin ubicar') + '</span><span class="add">+</span></button>';
       }).join('') + (list.length > 150 ? '<p class="muted small">Mostrando 150 de ' + list.length + '. Buscá para afinar.</p>' : '')
-        : '<p class="muted small">' + (!scopeAll && !mine ? 'Este vendedor no tiene clientes asignados. Asignáselos en Clientes o elegí “Todos los de mi equipo”.' : 'No hay más clientes con ese filtro.') + '</p>');
+        : '<p class="muted small">' + (!scopeAll && !mine ? 'Este vendedor no tiene clientes asignados. Asignáselos en Clientes o elegí “Todos los de mi equipo y mis zonas”.' :
+          zf && !scopeAll ? 'Este vendedor no tiene más clientes en esa zona. Elegí “Todos los de mi equipo y mis zonas” para ver los demás comercios de la zona.' : 'No hay más clientes con ese filtro.') + '</p>');
     }
     function drawStops() {
       var u = byId(users, rutaSel.sellerId);
@@ -448,6 +455,7 @@
     $('#week', el).addEventListener('click', function (e) { var b = e.target.closest('[data-day]'); if (b) go(rutaSel.sellerId, b.dataset.day); });
     $('#cq', el).addEventListener('input', drawClients);
     $('#csort', el).addEventListener('change', drawClients);
+    $('#czone', el).addEventListener('change', function () { rutaSel.zoneId = this.value; drawClients(); });
     $('#cscope', el).addEventListener('change', function () { scopeAll = this.value === 'all'; drawClients(); });
     $('#clist', el).addEventListener('click', function (e) { var b = e.target.closest('[data-add]'); if (!b) return; stops.push(b.dataset.add); dirty = true; drawStops(); drawClients(); });
     $('#rstops', el).addEventListener('click', function (e) {
