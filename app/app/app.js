@@ -257,7 +257,7 @@
   // Entrega: con cliente se programa por defecto para el próximo día hábil (no domingo), turno mañana.
   var SHIFT_NAMES = { manana: 'Mañana', tarde: 'Tarde' };
   function nextWorkDay() { var d = new Date(); d.setDate(d.getDate() + 1); if (d.getDay() === 0) d.setDate(d.getDate() + 1); return dayKey(d); }
-  var cartDelivers = function () { return cart.deliv === 'auto' ? !!cart.clientId : cart.deliv === 'si'; };
+  var cartDelivers = function () { return isAdmin() && cart.deliv === 'si'; }; // por defecto sin entrega: se programa después desde Ventas
   var DELIV_STATUS = { pendiente: ['por entregar', 'pendiente'], en_ruta: ['en camino', 'pendiente'], entregada: ['entregada', 'pagada'], no_entregada: ['no entregada', 'anulada'] };
   function deliveryText(d, short) {
     if (!d) return '';
@@ -335,6 +335,7 @@
         '<label class="f">Descuento %<input id="cDisc" type="number" min="0" max="100" step="any" value="' + cart.discount + '"></label>' +
         '<label class="f">Nota<input id="cNotes" value="' + esc(cart.notes) + '" placeholder="Opcional"></label>' +
         (function () {
+          if (!isAdmin()) return ''; // por ahora la entrega la programa el administrador (acá o desde Ventas)
           var on = cartDelivers(); if (on && !cart.dDay) cart.dDay = nextWorkDay();
           return '<div class="f full deliv"><span>🚚 Entrega</span><div class="deliv-row">' +
             '<select id="cDel"><option value="si"' + (on ? ' selected' : '') + '>Programar entrega</option><option value="no"' + (on ? '' : ' selected') + '>Sin entrega (se lo lleva)</option></select>' +
@@ -433,7 +434,7 @@
       cart.address = $('#cAddr', el).value.trim(); cart.phone = $('#cPhone', el).value.trim();
       if (cart.status === 'pendiente' && !cart.clientId) { toast('Elegí un cliente para dejar la venta pendiente de cobro', true); return; }
       var withDel = cartDelivers();
-      if (withDel && !cart.clientId) { toast('Para programar una entrega elegí el cliente (o marcá "Sin entrega")', true); return; }
+      if (withDel && !cart.clientId && !cart.address) { toast('Para programar la entrega poné la dirección de entrega (o elegí el cliente)', true); return; }
       if (withDel && !cart.dDay) { toast('Elegí el día de entrega', true); return; }
       btn.disabled = true;
       var body = {
@@ -556,20 +557,30 @@
   function salesTable(list, compact) {
     if (!list.length) return '<div class="empty">Todavía no hay ventas.</div>';
     var opts = STATUSES.filter(function (x) { return x !== 'anulada' || isAdmin(); });
+    // Columna Entrega: el administrador programa camión, día y turno desde acá (o desde el comprobante).
+    var delCol = !compact;
+    var canSched = function (s) { return isAdmin() && s.status !== 'anulada' && (!s.delivery || ['pendiente', 'no_entregada'].indexOf(s.delivery.status) >= 0); };
     return '<div class="tbl-wrap"><table><thead><tr><th>N.º</th><th>Fecha</th><th>Cliente</th>' + (compact ? '' : '<th>Pago</th>') +
       (compact || !isBoss() ? '' : '<th>Vendedor</th>') +
-      '<th>Estado</th><th class="num">Total</th><th></th></tr></thead><tbody>' +
+      '<th>Estado</th><th class="num">Total</th>' + (delCol ? '<th>Entrega</th>' : '') + '<th></th></tr></thead><tbody>' +
       list.map(function (s) {
+        var del = '';
+        if (delCol) {
+          var t = s.delivery ? byId(db.trucks || [], s.delivery.truckId) : null;
+          del = '<td class="small deliv-cell">' + (s.delivery ? '🚚 ' + esc(deliveryText(s.delivery, true)) + '<div>' + (t ? esc(t.name) : '<span class="muted">sin camión</span>') + ' ' + deliveryPill(s.delivery) + '</div>' : '') +
+            (canSched(s) ? '<button class="btn sm' + (s.delivery ? '' : ' primary') + '" data-sched="' + s.id + '">' + (s.delivery ? 'Cambiar' : '🚚 Programar') + '</button>' : (s.delivery ? '' : '<span class="muted">—</span>')) + '</td>';
+        }
         return '<tr><td>' + s.number + '</td><td>' + fmtDateTime(s.date) + '</td><td>' + esc(s.clientName) + '</td>' +
           (compact ? '' : '<td>' + esc(s.payment) + '</td>') +
           (compact || !isBoss() ? '' : '<td>' + esc(s.userName || '—') + '</td>') +
           '<td>' + (compact || s.status === 'anulada' ? '<span class="pill ' + s.status + '">' + s.status + '</span>' :
             '<select data-status="' + s.id + '">' + opts.map(function (x) { return '<option' + (x === s.status ? ' selected' : '') + '>' + x + '</option>'; }).join('') + '</select>') + '</td>' +
-          '<td class="num"><b>' + money(s.total) + '</b>' + (s.delivery && !compact ? '<div class="small muted" title="Entrega">🚚 ' + esc(deliveryText(s.delivery, true)) + ' ' + deliveryPill(s.delivery) + '</div>' : '') + '</td><td class="act"><button class="btn sm" data-view="' + s.id + '">Ver</button></td></tr>';
+          '<td class="num"><b>' + money(s.total) + '</b></td>' + del + '<td class="act"><button class="btn sm" data-view="' + s.id + '">Ver</button></td></tr>';
       }).join('') + '</tbody></table></div>';
   }
   function bindSalesTable(el, after) {
     $$('[data-view]', el).forEach(function (b) { b.addEventListener('click', function () { showReceipt(byId(db.sales, b.dataset.view)); }); });
+    $$('[data-sched]', el).forEach(function (b) { b.addEventListener('click', function () { deliveryModal(byId(db.sales, b.dataset.sched)); }); });
     $$('[data-status]', el).forEach(function (sel) {
       sel.addEventListener('change', function () {
         var s = byId(db.sales, sel.dataset.status);
@@ -760,15 +771,23 @@
   }
 
   // Programar o cambiar la entrega de una venta ya hecha (día, turno y camión).
+  // Lo usa el administrador desde Ventas (columna Entrega) o desde el comprobante. Sirve también para
+  // Consumidor final: alcanza con la dirección de entrega.
   function deliveryModal(s) {
-    if (!s.clientId) { toast('La venta no tiene cliente: no se puede programar una entrega.', true); return; }
-    var d = s.delivery || {};
-    formModal('Entrega de la venta N.º ' + s.number, [
+    var d = s.delivery || {}, c = s.clientId ? byId(db.clients, s.clientId) : null;
+    var trucks = (db.trucks || []).filter(function (t) { return t.active !== false; });
+    formModal('🚚 Entrega · venta N.º ' + s.number + ' · ' + s.clientName, [
+      { name: 'truckId', label: 'Camión', type: 'select', full: true, options: [{ v: '', t: trucks.length ? 'Sin camión todavía (lo asigna Logística)' : 'No hay camiones: se crean en Logística → Camiones' }].concat(trucks.map(function (t) { return { v: t.id, t: t.name + (t.plate ? ' · ' + t.plate : '') }; })) },
       { name: 'day', label: 'Día de entrega (vacío = sin entrega)', type: 'date' },
       { name: 'shift', label: 'Turno', type: 'select', options: Object.keys(SHIFT_NAMES).map(function (k) { return { v: k, t: SHIFT_NAMES[k] }; }) },
-      { name: 'truckId', label: 'Camión', type: 'select', options: [{ v: '', t: 'Lo asigna Logística' }].concat((db.trucks || []).map(function (t) { return { v: t.id, t: t.name + (t.plate ? ' · ' + t.plate : '') }; })) }
-    ], { day: d.day || nextWorkDay(), shift: d.shift || 'manana', truckId: d.truckId || '' }, function (o) {
-      return act(api('PUT', '/sales/' + s.id + '/delivery', o), o.day ? 'Entrega programada' : 'Entrega quitada');
+      { name: 'deliveryAddress', label: 'Dirección de entrega', full: true, ph: 'Calle, número, apto., barrio' },
+      { name: 'deliveryPhone', label: 'Teléfono de quien recibe', type: 'tel' }
+    ], {
+      truckId: d.truckId || (trucks.length === 1 ? trucks[0].id : ''), day: d.day || nextWorkDay(), shift: d.shift || 'manana',
+      deliveryAddress: s.deliveryAddress || (c && c.address) || '', deliveryPhone: s.deliveryPhone || (c && c.phone) || ''
+    }, function (o) {
+      if (o.day && !o.deliveryAddress && !s.clientId) { toast('Poné la dirección de entrega', true); return Promise.reject(new Error('dir')); }
+      return act(api('PUT', '/sales/' + s.id + '/delivery', o), o.day ? 'Entrega programada: ' + deliveryText({ day: o.day, shift: o.shift, truckId: o.truckId }) : 'Entrega quitada');
     });
   }
   function showReceipt(s) {
@@ -785,7 +804,7 @@
         (s.delivery.collected ? '<br><b>Cobró el chofer:</b> ' + money(s.delivery.collected.amount) + ' · ' + esc(s.delivery.collected.method) : '') +
         (s.delivery.failReason ? '<br><span class="warn">No se entregó: ' + esc(s.delivery.failReason) + '</span>' : '')
         : '<span class="muted">sin entrega</span>') +
-      (s.status !== 'anulada' && (!s.delivery || ['pendiente', 'no_entregada'].indexOf(s.delivery.status) >= 0) ? ' <button class="btn sm" id="chgDeliv">' + (s.delivery ? 'Cambiar entrega' : 'Programar entrega') + '</button>' : '') + '</p>' +
+      (isAdmin() && s.status !== 'anulada' && (!s.delivery || ['pendiente', 'no_entregada'].indexOf(s.delivery.status) >= 0) ? ' <button class="btn sm" id="chgDeliv">' + (s.delivery ? 'Cambiar entrega' : 'Programar entrega') + '</button>' : '') + '</p>' +
       '<table><thead><tr><th>Producto</th><th class="num">Cant.</th><th class="num">Precio</th><th class="num">IVA</th><th class="num">Importe</th></tr></thead><tbody>' +
       s.items.map(function (it) {
         return '<tr><td>' + esc(it.name) + '</td><td class="num">' + it.qty + '</td><td class="num">' + money(it.price) + '</td><td class="num">' + it.iva + '%</td><td class="num">' + money(it.qty * it.price) + '</td></tr>';

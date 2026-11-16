@@ -98,6 +98,10 @@ module.exports = function entregas(r, h) {
     if (s.delivery && ['en_ruta', 'entregada'].includes(s.delivery.status)) fail(400, 'La entrega ya salió o ya se hizo.');
     const prev = s.delivery || {};
     const d = await cleanDelivery(req.body, prev);
+    // dirección y teléfono de entrega (sirve también para ventas a Consumidor final)
+    if (req.body.deliveryAddress !== undefined) s.deliveryAddress = str(req.body.deliveryAddress, 200);
+    if (req.body.deliveryPhone !== undefined) s.deliveryPhone = str(req.body.deliveryPhone, 40);
+    if (d && !s.clientId && !s.deliveryAddress) fail(400, 'Poné la dirección de entrega.');
     // si cambia de día, turno o camión, sale de la ruta guardada
     if (prev.routeId && (!d || d.day !== prev.day || d.shift !== prev.shift || d.truckId !== prev.truckId)) {
       const rt = await store.get('delivroutes', prev.routeId);

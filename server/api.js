@@ -304,7 +304,7 @@ module.exports = function api() {
     if (req.user.role === 'logistica' || req.user.role === 'chofer') fail(403, 'Tu usuario no hace ventas.');
     const list = b.list;
     const delivery = await deliveryHelpers.cleanDelivery(b.delivery);
-    if (delivery && !client) fail(400, 'Para programar una entrega elegí el cliente.');
+    if (delivery && !client && !str(b.deliveryAddress, 200)) fail(400, 'Para programar una entrega poné la dirección de entrega (o elegí el cliente).');
 
     const sale = await store.tx(async s => {
       const settings = await getSettings(s);

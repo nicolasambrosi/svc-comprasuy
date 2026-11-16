@@ -98,16 +98,18 @@
         var del = s.delivery;
         var tid = del.truckId && byId(d.trucks, del.truckId) ? del.truckId : '';
         if (del.status === 'entregada' || del.status === 'no_entregada') { done.push(s); return; }
+        // una parada por cliente; las de Consumidor final, una por venta (cada una con su dirección)
+        var key = s.clientId || 'v' + s.id;
         var g = groups[tid] = groups[tid] || {}, c = clients[s.clientId] || {};
-        var st = g[s.clientId] = g[s.clientId] || { clientId: s.clientId, clientName: s.clientName, address: s.deliveryAddress || c.address || '', phone: s.deliveryPhone || c.phone || '', lat: c.lat, lng: c.lng, saleIds: [], due: 0, items: 0, sellers: {}, status: del.status };
+        var st = g[key] = g[key] || { key: key, clientId: s.clientId, clientName: s.clientName, address: s.deliveryAddress || c.address || '', phone: s.deliveryPhone || c.phone || '', lat: c.lat, lng: c.lng, saleIds: [], due: 0, items: 0, sellers: {}, status: del.status };
         st.saleIds.push(s.id); st.due += s.due || 0; st.items += s.items.reduce(function (a, it) { return a + it.qty; }, 0); st.sellers[s.userName || ''] = 1;
         if (del.status === 'en_ruta') st.status = 'en_ruta';
       });
       var routeOf = function (tid) { return d.routes.filter(function (r) { return r.truckId === tid; })[0]; };
       var ordered = function (tid) {
         var list = Object.keys(groups[tid] || {}).map(function (k) { return groups[tid][k]; });
-        var ord = L.order[tid] || ((routeOf(tid) || {}).stops || []).map(function (s) { return s.clientId; });
-        list.sort(function (a, b) { var ia = ord.indexOf(a.clientId), ib = ord.indexOf(b.clientId); return (ia < 0 ? 1e9 : ia) - (ib < 0 ? 1e9 : ib) || a.clientName.localeCompare(b.clientName); });
+        var ord = L.order[tid] || ((routeOf(tid) || {}).stops || []).map(function (s) { return s.clientId || 'v' + s.saleIds[0]; });
+        list.sort(function (a, b) { var ia = ord.indexOf(a.key), ib = ord.indexOf(b.key); return (ia < 0 ? 1e9 : ia) - (ib < 0 ? 1e9 : ib) || a.clientName.localeCompare(b.clientName); });
         return list;
       };
       var truckOpts = function (cur) { return '<option value="">Sin camión</option>' + trucks.map(function (t) { return '<option value="' + t.id + '"' + (t.id === cur ? ' selected' : '') + '>' + esc(t.name) + '</option>'; }).join(''); };
@@ -133,7 +135,7 @@
         var m = routeMeters(list, d.depot, true);
         html += '<div class="card truck-card"><div class="head" style="margin-bottom:6px"><h2 style="margin:0">' + esc(t.name) + (t.plate ? ' <span class="muted small">' + esc(t.plate) + '</span>' : '') + '</h2>' +
           (rt ? '<span class="pill ' + ROUTE_ST[rt.status][1] + '">' + ROUTE_ST[rt.status][0] + '</span>' : '<span class="pill">sin guardar</span>') + '</div>' +
-          '<p class="small muted" style="margin:0 0 8px">Chofer: ' + (drv ? esc(drv.name) : '<span class="warn">sin chofer</span>') + ' · ' + list.length + ' parada' + (list.length === 1 ? '' : 's') + (list.length ? ' · ≈ ' + fmtKm(m) + ' (estimado, ida y vuelta)' : '') + '</p>' +
+          '<p class="small muted" style="margin:0 0 8px">Chofer: ' + (drv ? esc(drv.name) : '<span class="warn">sin chofer</span>') + ' · ' + list.length + ' parada' + (list.length === 1 ? '' : 's') + (m > 0 ? ' · ≈ ' + fmtKm(m) + ' (estimado, ida y vuelta)' : '') + '</p>' +
           (list.length ? list.map(function (st, i) { return stopRow(st, i, t.id, locked); }).join('') : '<p class="muted small">Sin entregas.</p>') +
           (list.length && !locked ? '<div class="truck-act"><button class="btn sm" data-opt="' + t.id + '">✨ Armar mejor ruta</button><button class="btn sm" data-map="' + t.id + '">🗺️ Mapa</button>' +
             '<button class="btn sm primary" data-save="' + t.id + '">' + (rt ? 'Guardar cambios' : 'Guardar y enviar al chofer') + '</button></div>' : '') +
@@ -155,7 +157,7 @@
         });
       });
       var move = function (key, dir) {
-        var p = key.split('|'), tid = p[0], i = +p[1], list = ordered(tid).map(function (s) { return s.clientId; }), j = i + dir;
+        var p = key.split('|'), tid = p[0], i = +p[1], list = ordered(tid).map(function (s) { return s.key; }), j = i + dir;
         if (j < 0 || j >= list.length) return; var x = list[i]; list[i] = list[j]; list[j] = x; L.order[tid] = list; draw();
       };
       $$('[data-up1]', P).forEach(function (b) { b.addEventListener('click', function () { move(b.dataset.up1, -1); }); });
@@ -163,7 +165,7 @@
       $$('[data-opt]', P).forEach(function (b) {
         b.addEventListener('click', function () {
           var tid = b.dataset.opt, before = routeMeters(ordered(tid), d.depot, true);
-          L.order[tid] = bestOrder(ordered(tid), d.depot).map(function (s) { return s.clientId; });
+          L.order[tid] = bestOrder(ordered(tid), d.depot).map(function (s) { return s.key; });
           draw();
           var after = routeMeters(ordered(tid), d.depot, true), sin = ordered(tid).filter(function (s) { return !hasGeo(s); }).length;
           toast('Ruta ordenada: ≈ ' + fmtKm(after) + (before - after > 50 ? ' (antes ' + fmtKm(before) + ')' : '') + (sin ? ' · ' + sin + ' sin ubicar quedan al final' : ''));

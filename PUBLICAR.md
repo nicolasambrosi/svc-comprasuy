@@ -102,8 +102,8 @@ la aprobación de una comisión que ya tiene pagos (primero se borran los pagos)
 Roles nuevos: **Logística** (camiones, rutas de entrega y estadísticas) y **Chofer** (Mis entregas). Ninguno de los dos ve
 ventas, clientes, productos ni comisiones fuera de sus pantallas.
 
-- Cada venta puede llevar entrega: día, turno (mañana/tarde) y camión (o "lo asigna Logística"). Con cliente se programa
-  sola para el próximo día hábil. Se cambia desde el comprobante ("Cambiar entrega").
+- Por ahora la entrega la programa el administrador: Ventas → columna Entrega → "🚚 Programar" (camión, día, turno,
+  dirección y teléfono). Sirve para Consumidor final si tiene dirección. El vendedor ve el estado pero no la programa.
 - Logística (menú Logística) elige día y turno, reparte las entregas entre camiones, junta las ventas del mismo cliente en
   una parada, ordena con "Armar mejor ruta" (vecino más cercano + 2-opt desde el depósito) y guarda: el chofer la recibe.
 - El chofer (Mis entregas) toca "Empezar ruta" (aviso "en camino" al vendedor y a los administradores), marca cada
