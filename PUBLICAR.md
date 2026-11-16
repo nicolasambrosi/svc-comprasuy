@@ -33,11 +33,17 @@ En hPanel → **Bases de datos → Administración** se crea una base MySQL. Des
 - Una vez creado el administrador, la contraseña se cambia desde la app (Configuración → Mi contraseña);
   cambiar `INITIAL_ADMIN_PASSWORD` después no tiene efecto.
 
-### Dos listas de productos: comercios e instituciones
+### Listas de productos: comercios, instituciones y REMAR
 
 Cada producto pertenece a una lista (campo `list`): **comercio** (por defecto) o **institucion** (residenciales e instituciones).
 Antes de vender, y al entrar a Productos, la app pregunta "¿Comercio o institución?" y muestra solo los productos y precios
 de esa lista. Cada venta guarda su lista; en Ventas se puede filtrar por ella. El servidor rechaza una venta que mezcle listas.
+
+La lista **remar** (REMAR) es privada: solo la ven los administradores. El servidor no manda sus productos ni sus ventas
+a supervisores ni vendedores, y solo un administrador puede vender con ella.
+
+**Duplicar venta:** en el comprobante de una venta (botón "Duplicar venta") o en el carrito, al elegir un cliente
+("Repetir su última venta"), se copia la venta al carrito con los precios y el stock de hoy, para revisarla y guardarla como venta nueva.
 
 ### Catálogos iniciales
 
@@ -78,6 +84,12 @@ Al pasar a este esquema, cada vendedor tomó como supervisor al de la zona que t
 Un supervisor con vendedores a cargo no puede cambiar de rol hasta que se les asigne otro; si se lo borra, quedan sin supervisor.
 
 Siempre tiene que quedar al menos un administrador activo. Tras 8 intentos fallidos de clave, ese email queda bloqueado 15 minutos.
+
+### Pagos de comisiones
+
+En Comisiones, un administrador registra los pagos de cada comisión aprobada (monto, fecha, forma de pago y nota; puede
+haber pagos parciales). Se guardan en la colección `compays`. El vendedor ve los pagos de su comisión. No se puede quitar
+la aprobación de una comisión que ya tiene pagos (primero se borran los pagos).
 
 ## 2b. Ventas en terreno (web, pensado para tablet)
 

@@ -231,17 +231,20 @@
 
   // ----- Listas de precios: comercios / residenciales e instituciones -----
   // Antes de vender o de ver productos se elige la lista; cada una tiene sus propios productos y precios.
+  // REMAR es una lista privada: solo la ven los administradores (el servidor no se la manda a nadie más).
   var LISTS = [
     { v: 'comercio', t: 'Comercio', d: 'Productos y precios para comercios' },
-    { v: 'institucion', t: 'Residencial o institución', d: 'Productos y precios para residenciales e instituciones' }
+    { v: 'institucion', t: 'Residencial o institución', d: 'Productos y precios para residenciales e instituciones' },
+    { v: 'remar', t: 'REMAR', d: 'Lista privada: solo la ven los administradores', admin: true }
   ];
-  var listOf = function (p) { return p && p.list === 'institucion' ? 'institucion' : 'comercio'; };
-  var listName = function (v) { return v === 'institucion' ? 'Residenciales e instituciones' : 'Comercios'; };
+  var myLists = function () { return LISTS.filter(function (l) { return !l.admin || isAdmin(); }); };
+  var listOf = function (p) { return p && (p.list === 'institucion' || p.list === 'remar') ? p.list : 'comercio'; };
+  var listName = function (v) { return v === 'institucion' ? 'Residenciales e instituciones' : v === 'remar' ? 'REMAR' : 'Comercios'; };
   var curList = '';
   function listChooser(el, title, onPick) {
-    el.innerHTML = '<div class="head"><h1>' + esc(title) + '</h1></div><div class="card list-pick"><h2>¿Comercio o institución?</h2>' +
+    el.innerHTML = '<div class="head"><h1>' + esc(title) + '</h1></div><div class="card list-pick"><h2>' + (isAdmin() ? '¿Qué lista de precios?' : '¿Comercio o institución?') + '</h2>' +
       '<p class="muted">Elegí la lista para ver sus productos y precios.</p><div class="list-opts">' +
-      LISTS.map(function (l) {
+      myLists().map(function (l) {
         var n = db.products.filter(function (p) { return listOf(p) === l.v; }).length;
         return '<button type="button" class="list-opt" data-list="' + l.v + '"><b>' + esc(l.t) + '</b><span>' + esc(l.d) + '</span><small>' + n + (n === 1 ? ' producto' : ' productos') + '</small></button>';
       }).join('') + '</div></div>';
@@ -309,6 +312,10 @@
         }).join('') : '<p class="muted">Tocá un producto para agregarlo.</p>') +
         '<div class="form" style="margin-top:14px">' +
         '<label class="f full">Cliente<select id="cClient">' + clientOpts + '</select></label>' +
+        (function () {
+          var last = cart.clientId ? lastSaleOf(cart.clientId) : null;
+          return last ? '<div class="f full"><button type="button" class="btn sm" id="cRepeat" data-sale="' + last.id + '">↻ Repetir su última venta (N.º ' + last.number + ' · ' + fmtDate(last.date) + ' · ' + money(last.total) + ')</button></div>' : '';
+        })() +
         '<label class="f full">Dirección de entrega<input id="cAddr" value="' + esc(cart.address) + '" placeholder="Calle, número, apto., barrio" autocomplete="off"></label>' +
         '<label class="f">Teléfono<input id="cPhone" type="tel" value="' + esc(cart.phone) + '" placeholder="09X XXX XXX" autocomplete="off"></label>' +
         '<label class="f">Medio de pago<select id="cPay">' + PAYMENTS.map(function (p) { return '<option' + (p === cart.payment ? ' selected' : '') + '>' + p + '</option>'; }).join('') + '</select></label>' +
@@ -391,6 +398,7 @@
       }
       if (e.target.dataset.rm != null) { cart.items.splice(+e.target.dataset.rm, 1); drawCart(); drawProducts(); }
       if (e.target.id === 'clear') { cart.items = []; drawCart(); drawProducts(); }
+      if (e.target.id === 'cRepeat') duplicateSale(byId(db.sales, e.target.dataset.sale));
       if (e.target.id === 'checkout') checkout(e.target, false);
       if (e.target.id === 'checkoutPrint') checkout(e.target, true);
     });
@@ -423,6 +431,40 @@
     drawProducts(); drawCart();
     $('#q', el).focus();
   };
+
+  // ----- Duplicar una venta -----
+  // Copia una venta anterior al carrito con los precios y el stock de hoy; se revisa y se guarda como venta nueva.
+  function lastSaleOf(clientId) {
+    var l = db.sales.filter(function (s) { return s.clientId === clientId && s.status !== 'anulada'; })
+      .sort(function (a, b) { return b.date.localeCompare(a.date); });
+    return l[0] || null;
+  }
+  function duplicateSale(s) {
+    if (!s) return;
+    var sameDraft = cart.items.length && !confirm('El carrito ya tiene productos. ¿Reemplazarlos por los de la venta N.º ' + s.number + '?');
+    if (sameDraft) return;
+    var list = listOf(s), notes = [];
+    cart = newCart();
+    cart.list = list;
+    var cl = s.clientId ? byId(db.clients, s.clientId) : null;
+    if (cl) { cart.clientId = cl.id; cart.address = s.deliveryAddress || cl.address || ''; cart.phone = s.deliveryPhone || cl.phone || ''; }
+    else if (s.clientId) notes.push('el cliente ya no está en tu lista');
+    cart.payment = s.payment || 'Efectivo';
+    cart.status = s.status === 'pendiente' || s.payment === 'Cuenta corriente' ? 'pendiente' : 'pagada';
+    cart.discount = s.discountPct || 0;
+    cart.notes = s.notes || '';
+    s.items.forEach(function (it) {
+      var p = byId(db.products, it.productId);
+      if (!p || listOf(p) !== list) { notes.push(it.name + ' ya no existe'); return; }
+      var q = Math.min(it.qty, p.stock);
+      if (q < 1) { notes.push(p.name + ' sin stock'); return; }
+      if (q < it.qty) notes.push(p.name + ': solo hay ' + p.stock);
+      cart.items.push({ productId: p.id, name: p.name, code: p.code, qty: q, price: p.price, iva: p.iva, cost: p.cost });
+    });
+    closeModal();
+    if (location.hash === '#/venta') render(); else location.hash = '#/venta';
+    toast('Copia de la venta N.º ' + s.number + ' con los precios de hoy. Revisala y guardala.' + (notes.length ? ' Ojo: ' + notes.join('; ') + '.' : ''), !!notes.length);
+  }
 
   function categories(list) {
     var s = {}; db.products.forEach(function (p) { if (p.category && (!list || listOf(p) === list)) s[p.category] = 1; });
@@ -656,9 +698,10 @@
       '<div class="tot big"><span>Total</span><span>' + money(s.total) + '</span></div></div>' +
       '<p class="small muted" style="margin-top:14px">Comprobante interno, no válido como factura electrónica (CFE).</p></div>' +
       '<div class="form print-pick">' + printPickerHtml(printPrefs()) + '</div>' +
-      '<div class="foot"><button class="btn" data-close>Cerrar</button><button class="btn" id="savePdf">Guardar PDF</button><button class="btn primary" id="print">Imprimir</button></div>';
+      '<div class="foot"><button class="btn" data-close>Cerrar</button><button class="btn" id="dupSale" title="Arma una venta nueva igual a esta, para revisarla y guardarla">Duplicar venta</button><button class="btn" id="savePdf">Guardar PDF</button><button class="btn primary" id="print">Imprimir</button></div>';
     openModal('Venta N.º ' + s.number, html, function (m) {
       bindPrintPicker(m);
+      $('#dupSale', m).addEventListener('click', function () { duplicateSale(s); });
       $('#print', m).addEventListener('click', function () { printSale(s, printFormat(printPrefs())); });
       $('#savePdf', m).addEventListener('click', function () {
         var b = this, txt = b.textContent; b.disabled = true; b.textContent = 'Generando…';
@@ -672,7 +715,7 @@
     el.innerHTML = '<div class="head"><h1>Ventas</h1><div class="actions"><button class="btn" id="exp">Exportar CSV</button><a class="btn primary" href="#/venta">+ Nueva venta</a></div></div>' +
       '<div class="toolbar"><input type="search" id="q" placeholder="Buscar por cliente, vendedor o N.º…">' +
       '<select id="st"><option value="">Todos los estados</option>' + STATUSES.map(function (s) { return '<option>' + s + '</option>'; }).join('') + '</select>' +
-      '<select id="ls"><option value="">Comercios e instituciones</option><option value="comercio">Solo comercios</option><option value="institucion">Solo instituciones</option></select>' +
+      '<select id="ls"><option value="">Todas las listas</option><option value="comercio">Solo comercios</option><option value="institucion">Solo instituciones</option>' + (isAdmin() ? '<option value="remar">Solo REMAR</option>' : '') + '</select>' +
       '<input type="date" id="from" title="Desde"><input type="date" id="to" title="Hasta"></div><div id="list"></div><p class="muted small" id="sum"></p>';
     function filtered() {
       var q = $('#q', el).value.toLowerCase(), st = $('#st', el).value, ls = $('#ls', el).value, from = $('#from', el).value, to = $('#to', el).value;
@@ -705,7 +748,7 @@
   var productFields = function () {
     return [
       { name: 'name', label: 'Nombre', req: true, full: true },
-      { name: 'list', label: 'Lista de precios', type: 'select', full: true, def: curList || 'comercio', options: [{ v: 'comercio', t: 'Comercios' }, { v: 'institucion', t: 'Residenciales e instituciones' }] },
+      { name: 'list', label: 'Lista de precios', type: 'select', full: true, def: curList || 'comercio', options: myLists().map(function (l) { return { v: l.v, t: listName(l.v) }; }) },
       { name: 'description', label: 'Presentación / descripción', ph: 'Ej.: caja x 20 botellas', full: true },
       { name: 'code', label: 'Código / SKU' },
       { name: 'category', label: 'Categoría', ph: 'Ej.: Bebidas' },
@@ -1224,7 +1267,7 @@
   window.SVC = {
     $: $, $$: $$, esc: esc, money: money, api: api, toast: toast, openModal: openModal, closeModal: closeModal, formModal: formModal, field: field,
     refresh: refresh, act: act, byId: byId, fmtDate: fmtDate, fmtDateTime: fmtDateTime, dayKey: dayKey, pad: pad, csv: csv, num: num,
-    views: views, render: render, shrinkImage: shrinkImage, isAdmin: isAdmin, isBoss: isBoss, showReceipt: showReceipt, ROLE_NAMES: ROLE_NAMES,
+    views: views, render: render, shrinkImage: shrinkImage, isAdmin: isAdmin, isBoss: isBoss, showReceipt: showReceipt, duplicateSale: duplicateSale, ROLE_NAMES: ROLE_NAMES,
     get db() { return db; },
     // Empieza una venta para un cliente (desde una visita).
     startSale: function (client) {

@@ -334,3 +334,8 @@ ul.plain{margin:6px 0;padding-left:18px}
 .ps-legend{display:flex;flex-wrap:wrap;gap:12px;font-size:13px;margin:8px 0}
 
 .map-note{background:#fff;padding:8px 10px;border-radius:10px;box-shadow:0 1px 6px rgba(0,0,0,.25);font-size:13px;max-width:240px}
+
+/* pagos de comisiones */
+.pay-list{list-style:none;margin:6px 0;padding:0;display:grid;gap:4px}
+.pay-list li{line-height:1.35}
+.pay-list .x{margin-left:4px}

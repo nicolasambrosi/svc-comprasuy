@@ -234,10 +234,11 @@ module.exports = function terreno(r, h) {
 
   // ---------- comisiones ----------
   // % sobre el neto (sin IVA, con descuento) de las ventas COBRADAS en el mes (fecha de cobro).
-  // El supervisor cobra además un % sobre lo cobrado por los vendedores de sus zonas.
+  // El supervisor cobra además un % sobre lo cobrado por los vendedores que tiene a cargo (supervisorId).
   // El vendedor ve su comisión solo cuando su supervisor (o un administrador) la aprueba.
+  // Un administrador registra los pagos de cada comisión aprobada (colección compays: puede haber pagos parciales).
   async function commissionRows(month, sc) {
-    const [users, sales, zones, approvals] = await Promise.all([store.all('users'), store.all('sales'), store.all('zones'), store.all('commissions')]);
+    const [users, sales, approvals, pays] = await Promise.all([store.all('users'), store.all('sales'), store.all('commissions'), store.all('compays')]);
     const paidIn = s => PAID.includes(s.status) && localDay(s.paidAt || s.date).slice(0, 7) === month;
     const netBy = {}, pendingBy = {};
     for (const s of sales) {
@@ -259,6 +260,8 @@ module.exports = function terreno(r, h) {
       };
       const ap = approvals.find(a => a.id === month + '|' + u.id);
       if (ap) { row.approval = ap; row.changed = ap.total !== row.total; }
+      row.payments = pays.filter(p => p.month === month && p.userId === u.id).sort((a, b) => (a.date + a.createdAt).localeCompare(b.date + b.createdAt));
+      row.paid = round2(row.payments.reduce((a, p) => a + p.amount, 0));
       return row;
     });
   }
@@ -271,8 +274,8 @@ module.exports = function terreno(r, h) {
     if (req.user.role === 'vendedor') {
       // el vendedor solo ve lo que su supervisor aprobó
       rows = rows.filter(x => x.userId === req.user.id).map(x => x.approval
-        ? { userId: x.userId, name: x.name, month, approval: x.approval }
-        : { userId: x.userId, name: x.name, month, approval: null });
+        ? { userId: x.userId, name: x.name, month, approval: x.approval, payments: x.payments, paid: x.paid }
+        : { userId: x.userId, name: x.name, month, approval: null, payments: [], paid: 0 });
     } else rows.forEach(x => { x.canApprove = canApprove(req.user, sc, x.userId); });
     res.json(rows);
   }));
@@ -292,7 +295,31 @@ module.exports = function terreno(r, h) {
   r.delete('/commissions/approve', needBoss, wrap(async (req, res) => {
     const month = str(req.query.month, 7), userId = str(req.query.userId, 90), sc = await scopeOf(req.user);
     if (!canApprove(req.user, sc, userId)) fail(403, 'No podés cambiar esta comisión.');
+    if ((await store.all('compays')).some(p => p.month === month && p.userId === userId)) fail(400, 'Esta comisión ya tiene pagos registrados. Borrá los pagos antes de quitar la aprobación.');
     await store.del('commissions', month + '|' + userId);
+    res.json({ ok: true });
+  }));
+  // ---------- pagos de comisiones (solo administradores) ----------
+  const PAY_METHODS = ['Transferencia', 'Efectivo', 'Depósito', 'Otro'];
+  r.post('/commissions/pay', needAdmin, wrap(async (req, res) => {
+    const b = req.body, month = str(b.month, 7), userId = str(b.userId, 90);
+    if (!MONTH.test(month)) fail(400, 'Mes inválido.');
+    const ap = await store.get('commissions', month + '|' + userId);
+    if (!ap) fail(400, 'Primero aprobá la comisión de ese mes.');
+    const amount = round2(Number(String(b.amount).replace(',', '.')));
+    if (!(amount > 0)) fail(400, 'Poné el monto pagado.');
+    const date = str(b.date, 10) || today(); if (!DAY.test(date)) fail(400, 'Fecha inválida.');
+    const u = await store.get('users', userId); if (!u) fail(404, 'Usuario no encontrado.');
+    const p = {
+      id: uid('cp'), month, userId, userName: u.name, amount, date,
+      method: PAY_METHODS.includes(b.method) ? b.method : 'Otro', notes: str(b.notes, 300),
+      paidBy: req.user.name, paidById: req.user.id, createdAt: new Date().toISOString()
+    };
+    res.json(await store.put('compays', p));
+  }));
+  r.delete('/commissions/pay/:id', needAdmin, wrap(async (req, res) => {
+    if (!(await store.get('compays', req.params.id))) fail(404, 'Pago no encontrado.');
+    await store.del('compays', req.params.id);
     res.json({ ok: true });
   }));
 

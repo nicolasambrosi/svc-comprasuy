@@ -637,7 +637,9 @@
         var x = rows[0], a = x && x.approval;
         b.innerHTML = a ? '<div class="grid kpis"><div class="card kpi accent"><span>Tu comisión de ' + monthName(comMonth) + '</span><b>' + money(a.total) + '</b></div>' +
           '<div class="card kpi"><span>Ventas cobradas (neto)</span><b>' + money(a.net) + '</b></div><div class="card kpi"><span>Porcentaje</span><b>' + a.pct + '%</b></div>' +
-          '<div class="card kpi"><span>Aprobada por</span><b class="small-b">' + esc(a.approvedBy) + '</b><span class="muted small">' + S.fmtDateTime(a.approvedAt) + '</span></div></div>'
+          '<div class="card kpi"><span>Aprobada por</span><b class="small-b">' + esc(a.approvedBy) + '</b><span class="muted small">' + S.fmtDateTime(a.approvedAt) + '</span></div>' +
+          '<div class="card kpi"><span>Te pagaron</span><b>' + money(x.paid) + '</b><span class="muted small">' + (x.paid >= a.total ? 'pagada completa' : 'faltan ' + money(a.total - x.paid)) + '</span></div></div>' +
+          (x.payments.length ? '<div class="card" style="margin-top:16px"><h2>Pagos</h2>' + payList(x, false) + '</div>' : '')
           : '<div class="card empty">Tu comisión de ' + monthName(comMonth) + ' todavía no fue aprobada por tu supervisor.</div>';
         return;
       }
@@ -645,8 +647,9 @@
       b.innerHTML = '<div class="grid kpis"><div class="card kpi accent"><span>Comisiones de ' + monthName(comMonth) + '</span><b>' + money(tot) + '</b></div>' +
         '<div class="card kpi"><span>Ventas cobradas (neto)</span><b>' + money(rows.reduce(function (a, x) { return a + x.net; }, 0)) + '</b></div>' +
         '<div class="card kpi"><span>Pendiente de cobro (neto)</span><b>' + money(rows.reduce(function (a, x) { return a + x.pendingNet; }, 0)) + '</b><span class="muted small">suma cuando se cobre</span></div>' +
-        '<div class="card kpi"><span>Aprobadas</span><b>' + appr + ' de ' + rows.length + '</b></div></div>' +
-        '<div class="tbl-wrap" style="margin-top:16px"><table><thead><tr><th>Usuario</th><th class="num">Sus ventas cobradas</th><th class="num">De su equipo</th><th class="num">Total</th><th>Estado</th><th></th></tr></thead><tbody>' +
+        '<div class="card kpi"><span>Aprobadas</span><b>' + appr + ' de ' + rows.length + '</b></div>' +
+        '<div class="card kpi"><span>Pagado</span><b>' + money(rows.reduce(function (a, x) { return a + x.paid; }, 0)) + '</b><span class="muted small">de ' + money(rows.reduce(function (a, x) { return a + (x.approval ? x.approval.total : 0); }, 0)) + ' aprobado</span></div></div>' +
+        '<div class="tbl-wrap" style="margin-top:16px"><table><thead><tr><th>Usuario</th><th class="num">Sus ventas cobradas</th><th class="num">De su equipo</th><th class="num">Total</th><th>Estado</th><th>Pago</th><th></th></tr></thead><tbody>' +
         rows.sort(function (a, b2) { return b2.total - a.total || a.name.localeCompare(b2.name); }).map(function (x) {
           var sup = x.role === 'supervisor';
           return '<tr><td><b>' + esc(x.name) + '</b><div class="small muted">' + S.ROLE_NAMES[x.role] + (sup ? ' · ' + x.teamSize + ' en su equipo' : '') + '</div></td>' +
@@ -655,7 +658,8 @@
             '<td class="num"><b>' + money(x.total) + '</b></td>' +
             '<td class="small">' + (x.approval ? '<span class="pill pagada">aprobada</span><div class="muted">' + esc(x.approval.approvedBy) + ' · ' + S.fmtDate(x.approval.approvedAt) + '</div>' +
               (x.changed ? '<div class="warn">Cambió desde la aprobación (era ' + money(x.approval.total) + ')</div>' : '') : '<span class="pill pendiente">sin aprobar</span>') + '</td>' +
-            '<td>' + (x.canApprove ? (x.approval ? (x.changed ? '<button class="btn sm primary" data-ap="' + x.userId + '">Aprobar de nuevo</button>' : '') + '<button class="btn sm" data-unap="' + x.userId + '">Quitar</button>' : '<button class="btn sm primary" data-ap="' + x.userId + '">Aprobar</button>') : '') + '</td></tr>';
+            '<td class="small">' + payCell(x) + '</td>' +
+            '<td>' + (x.canApprove ? (x.approval ? (x.changed ? '<button class="btn sm primary" data-ap="' + x.userId + '">Aprobar de nuevo</button>' : '') + (x.payments.length ? '' : '<button class="btn sm" data-unap="' + x.userId + '">Quitar</button>') : '<button class="btn sm primary" data-ap="' + x.userId + '">Aprobar</button>') : '') + '</td></tr>';
         }).join('') + '</tbody></table></div>' +
         (rows.some(function (x) { return !x.pct && !x.teamPct; }) ? '<p class="muted small">Los porcentajes se cargan en Configuración → Usuarios → Editar.</p>' : '');
       $$('[data-ap]', b).forEach(function (btn) {
@@ -664,6 +668,27 @@
           if (!confirm('¿Aprobar la comisión de ' + x.name + ' de ' + monthName(comMonth) + ' por ' + money(x.total) + '? ' + (x.role === 'vendedor' ? 'La va a poder ver.' : ''))) return;
           btn.disabled = true;
           api('POST', '/commissions/approve', { userId: x.userId, month: comMonth }).then(function () { toast('Comisión aprobada'); load(); }, function (e) { toast(e.message, true); btn.disabled = false; });
+        });
+      });
+      $$('[data-pay]', b).forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var x = rows.filter(function (r) { return r.userId === btn.dataset.pay; })[0], left = Math.max(0, Math.round((x.approval.total - x.paid) * 100) / 100);
+          S.formModal('Registrar pago · ' + x.name + ' · ' + monthName(comMonth), [
+            { name: 'amount', label: 'Monto pagado ($U)', type: 'number', req: true },
+            { name: 'date', label: 'Fecha del pago', type: 'date', req: true },
+            { name: 'method', label: 'Forma de pago', type: 'select', options: ['Transferencia', 'Efectivo', 'Depósito', 'Otro'].map(function (m) { return { v: m, t: m }; }) },
+            { name: 'notes', label: 'Nota (opcional: n.º de transferencia, recibo…)', full: true }
+          ], { amount: left || '', date: today(), method: 'Transferencia' }, function (o) {
+            o.month = comMonth; o.userId = x.userId;
+            return S.act(api('POST', '/commissions/pay', o), 'Pago registrado', load);
+          });
+        });
+      });
+      $$('[data-delpay]', b).forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          if (!confirm('¿Borrar este pago registrado?')) return;
+          btn.disabled = true;
+          api('DELETE', '/commissions/pay/' + encodeURIComponent(btn.dataset.delpay)).then(function () { toast('Pago borrado'); load(); }, function (e) { toast(e.message, true); btn.disabled = false; });
         });
       });
       $$('[data-unap]', b).forEach(function (btn) {
@@ -676,12 +701,29 @@
     $('#cm', el).addEventListener('change', function () { if (this.value) { comMonth = this.value; load(); } });
     var ex = $('#cExp', el);
     if (ex) ex.addEventListener('click', function () {
-      S.csv('comisiones-' + comMonth + '.csv', [['Mes', 'Usuario', 'Rol', 'NetoCobrado', 'Pct', 'Comision', 'NetoEquipo', 'PctEquipo', 'ComisionEquipo', 'Total', 'Aprobada', 'AprobadaPor']].concat(rows.map(function (x) {
-        return [comMonth, x.name, S.ROLE_NAMES[x.role], x.net, x.pct, x.commission, x.teamNet, x.teamPct, x.teamCommission, x.total, x.approval ? 'si' : 'no', x.approval ? x.approval.approvedBy : ''];
+      S.csv('comisiones-' + comMonth + '.csv', [['Mes', 'Usuario', 'Rol', 'NetoCobrado', 'Pct', 'Comision', 'NetoEquipo', 'PctEquipo', 'ComisionEquipo', 'Total', 'Aprobada', 'AprobadaPor', 'Pagado', 'Pagos']].concat(rows.map(function (x) {
+        return [comMonth, x.name, S.ROLE_NAMES[x.role], x.net, x.pct, x.commission, x.teamNet, x.teamPct, x.teamCommission, x.total, x.approval ? 'si' : 'no', x.approval ? x.approval.approvedBy : '',
+          x.paid, x.payments.map(function (p) { return p.date + ' ' + p.method + ' ' + p.amount + (p.notes ? ' (' + p.notes + ')' : ''); }).join(' | ')];
       })));
     });
     load();
   };
+  // Pagos de comisiones: los registra un administrador sobre una comisión aprobada (puede haber pagos parciales).
+  function payList(x, canDel) {
+    return '<ul class="pay-list">' + x.payments.map(function (p) {
+      return '<li><b>' + money(p.amount) + '</b> · ' + S.fmtDate(p.date + 'T12:00:00') + ' · ' + esc(p.method) + (p.notes ? ' · ' + esc(p.notes) : '') +
+        '<span class="muted"> · registró ' + esc(p.paidBy) + '</span>' +
+        (canDel ? ' <button class="x" data-delpay="' + p.id + '" title="Borrar este pago">×</button>' : '') + '</li>';
+    }).join('') + '</ul>';
+  }
+  function payCell(x) {
+    var adm = S.isAdmin(), a = x.approval;
+    if (!a) return x.payments.length ? payList(x, adm) : '<span class="muted">—</span>';
+    var due = Math.round((a.total - x.paid) * 100) / 100;
+    var st = !x.paid ? '<span class="pill pendiente">sin pagar</span>' : due > 0 ? '<span class="pill pendiente">parcial · faltan ' + money(due) + '</span>' : '<span class="pill pagada">pagada</span>';
+    return st + (x.paid ? '<div>' + money(x.paid) + ' pagado</div>' : '') + (x.payments.length ? payList(x, adm) : '') +
+      (adm && due > 0 ? '<button class="btn sm primary" data-pay="' + x.userId + '">Registrar pago</button>' : '');
+  }
   function monthName(m) {
     var n = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'setiembre', 'octubre', 'noviembre', 'diciembre'];
     return n[+m.slice(5) - 1] + ' ' + m.slice(0, 4);

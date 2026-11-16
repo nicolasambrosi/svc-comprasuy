@@ -38,9 +38,13 @@ function cleanProduct(b, old) {
   p.list = listOf(b.list === undefined && old ? old.list : b.list);
   return p;
 }
-// Dos listas de precios: comercios (por defecto) y residenciales e instituciones.
-const LISTS = ['comercio', 'institucion'];
-const listOf = v => (v === 'institucion' ? 'institucion' : 'comercio');
+// Listas de precios: comercios (por defecto), residenciales e instituciones, y REMAR (privada: solo administradores).
+const LISTS = ['comercio', 'institucion', 'remar'];
+const listOf = v => (v === 'institucion' || v === 'remar' ? v : 'comercio');
+const LIST_NAMES = { comercio: 'comercios', institucion: 'instituciones', remar: 'REMAR' };
+const isPrivateList = v => v === 'remar';
+// La lista REMAR (productos y ventas) solo la ven los administradores.
+const canSeeList = (user, v) => user.role === 'admin' || !isPrivateList(v);
 function cleanClient(b, old) {
   const c = Object.assign({}, old);
   c.name = str(b.name, 150); if (!c.name) fail(400, 'El cliente necesita un nombre.');
@@ -110,8 +114,8 @@ module.exports = function api() {
       store.all('products'), store.all('clients'), store.all('sales'), getSettings(), store.all('users'), store.all('zones')
     ]);
     res.json({
-      me: auth.publicUser(req.user), settings, products, clients: clients.filter(c => canSeeClient(sc, c)),
-      sales: sales.filter(s => canSeeSale(sc, s)),
+      me: auth.publicUser(req.user), settings, products: products.filter(p => canSeeList(req.user, p.list)), clients: clients.filter(c => canSeeClient(sc, c)),
+      sales: sales.filter(s => canSeeSale(sc, s) && canSeeList(req.user, s.list)),
       // admin: todos; supervisor: su equipo; vendedor: nadie más
       users: req.user.role === 'vendedor' ? [] : users.filter(u => inScope(sc, u.id)).map(auth.publicUser),
       zones,
@@ -237,6 +241,7 @@ module.exports = function api() {
     if (b.clientId && (!client || !canSeeClient(await scopeOf(req.user), client))) fail(400, 'El cliente no existe o no está asignado a tu usuario.');
     if (status === 'pendiente' && !client) fail(400, 'Elegí un cliente para dejar la venta pendiente de cobro.');
     if (!LISTS.includes(b.list)) fail(400, 'Elegí si la venta es para un comercio o una institución.');
+    if (!canSeeList(req.user, b.list)) fail(403, 'Solo un administrador puede vender con esa lista.');
     const list = b.list;
 
     const sale = await store.tx(async s => {
@@ -245,7 +250,7 @@ module.exports = function api() {
       for (const it of reqItems) {
         const qty = int(it.qty); if (qty < 1) fail(400, 'Cantidad inválida.');
         const p = await s.get('products', String(it.productId)); if (!p) fail(400, 'Un producto ya no existe. Recargá la página.');
-        if (listOf(p.list) !== list) fail(400, p.name + ' no es de la lista de ' + (list === 'institucion' ? 'instituciones' : 'comercios') + '. Recargá la página.');
+        if (listOf(p.list) !== list) fail(400, p.name + ' no es de la lista de ' + LIST_NAMES[list] + '. Recargá la página.');
         if (qty > p.stock) fail(409, 'Stock insuficiente de ' + p.name + ' (quedan ' + p.stock + ').');
         p.stock -= qty; products.push(p);
         items.push({ productId: p.id, name: p.name, code: p.code, qty, price: p.price, iva: p.iva, cost: p.cost });
@@ -281,7 +286,7 @@ module.exports = function api() {
     const sc = await scopeOf(req.user);
     const sale = await store.tx(async s => {
       const sale = await s.get('sales', req.params.id);
-      if (!sale || !canSeeSale(sc, sale)) fail(404, 'Venta no encontrada.');
+      if (!sale || !canSeeSale(sc, sale) || !canSeeList(req.user, sale.list)) fail(404, 'Venta no encontrada.');
       if (sale.status === 'anulada') fail(400, 'La venta ya está anulada.');
       if (to === 'anulada') {
         for (const it of sale.items) {
@@ -361,8 +366,8 @@ module.exports = function api() {
   r.get('/backup', needAdmin, wrap(async (req, res) => {
     const [products, clients, sales, settings] = await Promise.all([store.all('products'), store.all('clients'), store.all('sales'), getSettings()]);
     // terreno: se incluye para tener copia (restaurar respaldo no los toca)
-    const [zones, routes, recorridos, visits, profiles, commissions] = await Promise.all(['zones', 'routes', 'recorridos', 'visits', 'profiles', 'commissions'].map(k => store.all(k)));
-    res.json({ app: 'SVC', version: 2, exportedAt: new Date().toISOString(), settings, products, clients, sales, zones, routes, recorridos, visits, profiles, commissions });
+    const [zones, routes, recorridos, visits, profiles, commissions, commissionPayments] = await Promise.all(['zones', 'routes', 'recorridos', 'visits', 'profiles', 'commissions', 'compays'].map(k => store.all(k)));
+    res.json({ app: 'SVC', version: 2, exportedAt: new Date().toISOString(), settings, products, clients, sales, zones, routes, recorridos, visits, profiles, commissions, commissionPayments });
   }));
   r.post('/import', needAdmin, wrap(async (req, res) => {
     const b = req.body, replace = b.mode === 'replace';
