@@ -245,7 +245,7 @@ th.chk input,td.chk input{width:16px;height:16px;accent-color:var(--orange);curs
 .pick{position:relative;display:flex;flex-direction:column;gap:2px;text-align:left;padding:11px 40px 11px 12px;border:1px solid var(--g10);border-radius:10px;background:#fff;font:inherit;cursor:pointer}
 .pick:hover{border-color:var(--orange)}
 .pick .add{position:absolute;right:12px;top:50%;transform:translateY(-50%);font-size:22px;font-weight:800;color:var(--orange)}
-.map-box{height:360px;border-radius:14px;overflow:hidden;border:1px solid var(--g10);margin:12px 0;background:var(--g5)}
+.map-box{position:relative;z-index:0;isolation:isolate;height:360px;border-radius:14px;overflow:hidden;border:1px solid var(--g10);margin:12px 0;background:var(--g5)}
 .map-box[hidden]{display:none}
 .map-empty{height:100%;display:grid;place-items:center;padding:20px;text-align:center}
 .mk span{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;border:2px solid #fff;color:#fff;font-weight:800;font-size:12px;box-shadow:0 1px 4px rgba(0,0,0,.35)}
@@ -379,3 +379,6 @@ ul.plain{margin:6px 0;padding-left:18px}
 .notice.unread{font-weight:600}
 .notice.unread::before{content:'';flex:0 0 8px;height:8px;border-radius:50%;background:var(--orange);order:-1}
 @media(max-width:560px){.lg-grid{grid-template-columns:1fr}.stop-row{flex-wrap:wrap}.stop-row select{max-width:none;flex:1}}
+
+/* los mapas (Leaflet) no tapan las ventanas: sus capas quedan dentro del mapa */
+.leaflet-container{z-index:0;isolation:isolate}
