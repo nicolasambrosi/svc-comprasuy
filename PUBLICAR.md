@@ -113,6 +113,7 @@ ventas, clientes, productos ni comisiones fuera de sus pantallas.
   una parada, ordena con "Armar mejor ruta" (vecino más cercano + 2-opt desde el depósito) y guarda: el chofer la recibe.
 - El chofer (Mis entregas) toca "Empezar ruta" (aviso "en camino" al vendedor y a los administradores), marca cada
   parada entregada (y el cobro: la venta pendiente pasa a cobrada) o no entregada (vuelve a pendiente para reprogramar).
+  Para marcar entregada pide nombre y cédula de quien recibe (obligatorios); quedan en la venta y en el aviso.
 - Km: GPS del celular del chofer mientras la ruta está en curso (si no hubo GPS, la estimación de la ruta). Tiempo: de
   "Empezar ruta" a la última parada. Promedios por camión en Logística → Kilómetros y tiempos.
 - Avisos (🔔 en el menú): dentro del sistema, se revisan cada minuto. Colecciones: `trucks`, `delivroutes`, `notices`.

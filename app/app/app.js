@@ -805,6 +805,7 @@
       '<br><b>Teléfono:</b> ' + (esc(dl.phone) || '<span class="muted">—</span>') + '<br><b>Pago:</b> ' + esc(s.payment) + '<br><b>Lista:</b> ' + esc(listName(listOf(s))) + (s.userName ? '<br><b>Vendedor:</b> ' + esc(s.userName) : '') + (s.notes ? '<br><b>Nota:</b> ' + esc(s.notes) : '') +
       '<br><b>Entrega:</b> ' + (s.delivery ? esc(deliveryText(s.delivery)) + ' ' + deliveryPill(s.delivery) +
         (s.delivery.deliveredAt ? ' <span class="muted small">' + esc(fmtDateTime(s.delivery.deliveredAt)) + ' · ' + esc(s.delivery.deliveredBy || '') + '</span>' : '') +
+        (s.delivery.receivedBy ? '<br><b>Recibió:</b> ' + esc(s.delivery.receivedBy.name) + ' · CI ' + esc(s.delivery.receivedBy.doc) : '') +
         (s.delivery.collected ? '<br><b>Cobró el chofer:</b> ' + money(s.delivery.collected.amount) + ' · ' + esc(s.delivery.collected.method) : '') +
         (s.delivery.failReason ? '<br><span class="warn">No se entregó: ' + esc(s.delivery.failReason) + '</span>' : '')
         : '<span class="muted">sin entrega</span>') +

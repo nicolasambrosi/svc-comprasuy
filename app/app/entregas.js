@@ -492,7 +492,7 @@
       cur.stops.map(function (st, i) {
         var ss = st.saleIds.map(function (id) { return sales[id]; }).filter(Boolean), dueAmt = ss.reduce(function (a, s) { return a + (s.due || 0); }, 0);
         var c = byId(cur.clients, st.clientId) || {}, phone = (ss[0] && ss[0].deliveryPhone) || c.phone;
-        var res = st.result === 'entregada' ? '<span class="pill pagada">entregada' + (st.collected ? ' · cobró ' + money(st.collected) : '') + '</span>' : st.result === 'no_entregada' ? '<span class="pill anulada">no entregada · ' + esc(st.reason || '') + '</span>' : '';
+        var res = st.result === 'entregada' ? '<span class="pill pagada">entregada' + (st.collected ? ' · cobró ' + money(st.collected) : '') + '</span>' + (st.receivedBy ? '<div class="small muted">Recibió ' + esc(st.receivedBy.name) + ' · CI ' + esc(st.receivedBy.doc) + '</div>' : '') : st.result === 'no_entregada' ? '<span class="pill anulada">no entregada · ' + esc(st.reason || '') + '</span>' : '';
         return '<div class="card stop-card' + (st.result ? ' done' : '') + '"><div class="stop-head"><span class="stop-n big">' + (i + 1) + '</span><div><b>' + esc(st.clientName) + '</b><div class="small muted">' + esc(st.address || c.address || 'Sin dirección') + '</div></div>' + res + '</div>' +
           ss.map(function (s) {
             if (s.kind === 'envio') return '<div class="small stop-sale"><b>📦 Envío E-' + s.number + '</b>' + (s.description ? ' · ' + esc(s.description) : '') + (s.notes ? '<div class="muted">Nota: ' + esc(s.notes) + '</div>' : '') + '</div>';
@@ -525,14 +525,19 @@
       b.addEventListener('click', function () {
         var i = +b.dataset.ok, st = cur.stops[i], ss = st.saleIds.map(function (id) { return sales[id]; }).filter(Boolean);
         var dueAmt = ss.reduce(function (a, s) { return a + (s.due || 0); }, 0);
-        var fields = dueAmt ? [
+        var who = [
+          { name: 'receiverName', label: 'Nombre de quien recibe', req: true, ph: 'Nombre y apellido' },
+          { name: 'receiverDoc', label: 'Cédula de quien recibe', req: true, ph: 'Ej.: 1.234.567-8' }
+        ];
+        var fields = who.concat(dueAmt ? [
           { name: 'amount', label: 'Cobrado ($U) · a cobrar ' + money(dueAmt), type: 'number', req: true },
           { name: 'method', label: 'Cómo pagó', type: 'select', options: S.PAYMENTS.map(function (p) { return { v: p, t: p === 'Cuenta corriente' ? 'No pagó: queda en cuenta corriente' : p }; }) },
           { name: 'note', label: 'Nota (opcional)', full: true }
-        ] : [{ name: 'note', label: 'Nota (opcional): quién recibió, etc.', full: true }];
+        ] : [{ name: 'note', label: 'Nota (opcional)', full: true }]);
         S.formModal('Entregado · ' + st.clientName, fields, { amount: dueAmt ? Math.round(dueAmt * 100) / 100 : '', method: 'Efectivo' }, function (o) {
           return getPos().then(function (pos) {
-            return api('POST', '/delivroutes/' + encodeURIComponent(cur.id) + '/stops/' + i, { result: 'entregada', amount: o.method === 'Cuenta corriente' ? 0 : o.amount, method: o.method, note: o.note, pos: pos });
+            if (String(o.receiverDoc).replace(/[^\dA-Za-z]/g, '').length < 6) { toast('Revisá la cédula de quien recibe.', true); throw new Error('ci'); }
+            return api('POST', '/delivroutes/' + encodeURIComponent(cur.id) + '/stops/' + i, { result: 'entregada', receiverName: o.receiverName, receiverDoc: o.receiverDoc, amount: o.method === 'Cuenta corriente' ? 0 : o.amount, method: o.method, note: o.note, pos: pos });
           }).then(function (rt) { toast('Entrega registrada · se avisó al vendedor'); reload(rt); }, function (e) { toast(e.message, true); throw e; });
         });
       });

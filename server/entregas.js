@@ -322,13 +322,20 @@ module.exports = function entregas(r, h) {
     const result = req.body.result === 'no_entregada' ? 'no_entregada' : 'entregada';
     const now = new Date().toISOString(), note = str(req.body.note, 300);
     let collected = 0;
+    let receiver = null;
     if (result === 'entregada') {
+      const rName = str(req.body.receiverName, 80), rDoc = str(req.body.receiverDoc, 20).replace(/[^\dA-Za-z]/g, '');
+      if (!rName) fail(400, 'Poné el nombre de quien recibe.');
+      if (rDoc.length < 6) fail(400, 'Poné la cédula de quien recibe (sin puntos ni guion está bien).');
+      receiver = { name: rName, doc: rDoc };
+      st.receivedBy = receiver;
       const method = PAY_METHODS.includes(req.body.method) ? req.body.method : 'Efectivo';
       const amount = Math.max(0, round2(Number(String(req.body.amount || 0).replace(',', '.')) || 0));
       let left = amount;
       for (const sid of st.saleIds) {
         const s = await getDoc(sid); if (!s || !s.delivery) continue;
         s.delivery.status = 'entregada'; s.delivery.deliveredAt = now; s.delivery.deliveredBy = req.user.name;
+        s.delivery.receivedBy = receiver;
         if (note) s.delivery.deliveryNote = note;
         if (s.kind === 'envio') { /* sin cobro */ } else if (s.status === 'pendiente' && s.list !== 'remar' && method !== 'Cuenta corriente' && left > 0) {
           const pay = Math.min(left, s.total); left = round2(left - pay); collected = round2(collected + pay);
@@ -352,7 +359,7 @@ module.exports = function entregas(r, h) {
     if (rt.stops.every(x => x.result)) finish(rt, req.user.name);
     await store.put('delivroutes', rt);
     await noticeSales(st.saleIds, s => result === 'entregada'
-      ? '✅ Entregada: ' + refOf(s) + ' a ' + s.clientName + (s.delivery && s.delivery.collected ? ' · cobró $' + s.delivery.collected.amount.toLocaleString('es-UY') + ' (' + s.delivery.collected.method + ')' : s.status === 'pendiente' ? ' · quedó pendiente de cobro' : '') + '.'
+      ? '✅ Entregada: ' + refOf(s) + ' a ' + s.clientName + ' · recibió ' + receiver.name + ' (CI ' + receiver.doc + ')' + (s.delivery && s.delivery.collected ? ' · cobró $' + s.delivery.collected.amount.toLocaleString('es-UY') + ' (' + s.delivery.collected.method + ')' : s.status === 'pendiente' ? ' · quedó pendiente de cobro' : '') + '.'
       : '⚠️ No se entregó: ' + refOf(s) + ' a ' + s.clientName + ' · ' + st.reason + (note ? ' (' + note + ')' : '') + '. Hay que reprogramarla.');
     res.json(await routeDetail(rt));
   }));
