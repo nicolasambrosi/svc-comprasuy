@@ -24,10 +24,19 @@ const due = s => (s.status === 'pendiente' ? s.total : 0); // lo que falta cobra
 
 // Lo que ven logística y choferes de una venta (las de la lista privada REMAR van sin detalle ni importes)
 function saleForDelivery(s) {
-  const base = { id: s.id, number: s.number, date: s.date, clientId: s.clientId, clientName: s.clientName, deliveryAddress: s.deliveryAddress || '', deliveryPhone: s.deliveryPhone || '', notes: s.notes || '', delivery: s.delivery, userId: s.userId, userName: s.userName, status: s.status };
+  const base = { id: s.id, kind: s.kind || 'venta', number: s.number, deliveryContact: s.deliveryContact || '', date: s.date, clientId: s.clientId, clientName: s.clientName, deliveryAddress: s.deliveryAddress || '', deliveryPhone: s.deliveryPhone || '', notes: s.notes || '', delivery: s.delivery, userId: s.userId, userName: s.userName, status: s.status };
+  if (s.kind === 'envio') return Object.assign(base, { items: [], description: s.description || '', total: 0, due: 0, payment: '' });
   if (s.list === 'remar') return Object.assign(base, { private: true, items: [], total: 0, due: 0, payment: '' });
   return Object.assign(base, { items: s.items.map(it => ({ name: it.name, qty: it.qty })), total: s.total, due: due(s), payment: s.payment });
 }
+
+// Envíos sin venta (los carga Logística para un cliente registrado): colección shipments, kind 'envio'.
+const COL = x => (x && x.kind === 'envio' ? 'shipments' : 'sales');
+const getDoc = async id => (await store.get('sales', id)) || (await store.get('shipments', id));
+const putDoc = x => store.put(COL(x), x);
+const allDocs = async () => (await store.all('sales')).concat(await store.all('shipments'));
+const refOf = s => (s.kind === 'envio' ? 'envío E-' + s.number : 'venta N.º ' + s.number);
+const intPk = v => Math.min(Math.max(Math.round(Number(v) || 0), 0), 999);
 
 module.exports = function entregas(r, h) {
   const { wrap, needUser, fail, str, uid } = h;
@@ -73,7 +82,7 @@ module.exports = function entregas(r, h) {
     const busy = (await store.all('delivroutes')).some(x => x.truckId === req.params.id && ['lista', 'en_curso'].includes(x.status));
     if (busy) fail(400, 'El camión tiene una ruta guardada o en curso. Terminala o pasá las entregas a otro camión.');
     await store.del('trucks', req.params.id);
-    for (const s of await store.all('sales')) if (s.delivery && s.delivery.truckId === req.params.id && s.delivery.status === 'pendiente') { s.delivery.truckId = ''; await store.put('sales', s); }
+    for (const s of await allDocs()) if (s.delivery && s.delivery.truckId === req.params.id && s.delivery.status === 'pendiente') { s.delivery.truckId = ''; await putDoc(s); }
     res.json({ ok: true });
   }));
 
@@ -86,12 +95,14 @@ module.exports = function entregas(r, h) {
     d.truckId = str(b.truckId, 90);
     if (d.truckId && !(await store.get('trucks', d.truckId))) fail(400, 'El camión elegido no existe.');
     d.note = str(b.note, 200);
+    if (b.packages !== undefined) d.packages = intPk(b.packages);
     return d;
   }
   h.cleanDelivery = cleanDelivery;
   // cambiar día, turno o camión de una venta (logística, o quien hizo la venta mientras no salió)
   r.put('/sales/:id/delivery', needUser, wrap(async (req, res) => {
-    const s = await store.get('sales', req.params.id); if (!s) fail(404, 'Venta no encontrada.');
+    const s = (await store.get('sales', req.params.id)) || (isLog(req.user) ? await store.get('shipments', req.params.id) : null);
+    if (!s) fail(404, 'Venta no encontrada.');
     const sc = await h.scopeOf(req.user);
     if (!isLog(req.user) && !h.canSeeSale(sc, s)) fail(404, 'Venta no encontrada.');
     if (s.status === 'anulada') fail(400, 'La venta está anulada.');
@@ -101,6 +112,7 @@ module.exports = function entregas(r, h) {
     // dirección y teléfono de entrega (sirve también para ventas a Consumidor final)
     if (req.body.deliveryAddress !== undefined) s.deliveryAddress = str(req.body.deliveryAddress, 200);
     if (req.body.deliveryPhone !== undefined) s.deliveryPhone = str(req.body.deliveryPhone, 40);
+    if (req.body.deliveryContact !== undefined) s.deliveryContact = str(req.body.deliveryContact, 80);
     if (d && !s.clientId && !s.deliveryAddress) fail(400, 'Poné la dirección de entrega.');
     // si cambia de día, turno o camión, sale de la ruta guardada
     if (prev.routeId && (!d || d.day !== prev.day || d.shift !== prev.shift || d.truckId !== prev.truckId)) {
@@ -110,15 +122,78 @@ module.exports = function entregas(r, h) {
     }
     // reprogramar una que no se entregó: vuelve a quedar por entregar (el motivo queda como historial)
     if (d && d.status === 'no_entregada') { d.status = 'pendiente'; d.lastFail = d.failReason; delete d.failReason; delete d.failedAt; }
+    if (s.kind === 'envio' && !d) fail(400, 'El envío necesita día de entrega (o borralo).');
     if (d) s.delivery = d; else delete s.delivery;
-    res.json(await store.put('sales', s));
+    res.json(await putDoc(s));
+  }));
+
+  // ---------- envíos sin venta (logística, a un cliente registrado) ----------
+  r.get('/shipments/clients', needLog, wrap(async (req, res) => {
+    const list = (await store.all('clients')).map(c => ({ id: c.id, name: c.name, address: c.address || '', phone: c.phone || '', lat: c.lat, lng: c.lng }));
+    res.json(list.sort((a, b) => a.name.localeCompare(b.name)));
+  }));
+  async function cleanShipment(b, old) {
+    const x = Object.assign({}, old);
+    const c = await store.get('clients', str(b.clientId, 90)); if (!c) fail(400, 'Elegí un cliente registrado.');
+    x.clientId = c.id; x.clientName = c.name;
+    x.deliveryAddress = str(b.deliveryAddress, 200) || c.address || '';
+    if (!x.deliveryAddress) fail(400, 'Poné la dirección de entrega.');
+    x.deliveryPhone = str(b.deliveryPhone, 40) || c.phone || '';
+    x.deliveryContact = str(b.deliveryContact, 80);
+    x.description = str(b.description, 300);
+    x.notes = str(b.notes, 300);
+    const prev = (old && old.delivery) || {};
+    const d = await cleanDelivery({ day: b.day, shift: b.shift, truckId: b.truckId, packages: b.packages !== undefined ? b.packages : prev.packages }, prev);
+    if (!d) fail(400, 'Elegí el día de entrega.');
+    if (prev.routeId && (d.day !== prev.day || d.shift !== prev.shift || d.truckId !== prev.truckId)) {
+      const rt = await store.get('delivroutes', prev.routeId);
+      if (rt && rt.status !== 'terminada') { rt.stops.forEach(st => { st.saleIds = st.saleIds.filter(id => id !== x.id); }); rt.stops = rt.stops.filter(st => st.saleIds.length); await store.put('delivroutes', rt); }
+      delete d.routeId;
+    }
+    if (d.status === 'no_entregada') { d.status = 'pendiente'; d.lastFail = d.failReason; delete d.failReason; delete d.failedAt; }
+    x.delivery = d;
+    return x;
+  }
+  r.post('/shipments', needLog, wrap(async (req, res) => {
+    const x = await cleanShipment(req.body, {});
+    const n = (await store.all('shipments')).reduce((m, y) => Math.max(m, y.number || 0), 0) + 1;
+    Object.assign(x, { id: uid('e'), kind: 'envio', number: n, date: new Date().toISOString(), status: 'envio', total: 0, items: [], userId: req.user.id, userName: req.user.name });
+    res.json(await store.put('shipments', x));
+  }));
+  r.put('/shipments/:id', needLog, wrap(async (req, res) => {
+    const old = await store.get('shipments', req.params.id); if (!old) fail(404, 'Envío no encontrado.');
+    if (old.delivery && ['en_ruta', 'entregada'].includes(old.delivery.status)) fail(400, 'El envío ya salió o ya se entregó.');
+    res.json(await store.put('shipments', await cleanShipment(req.body, old)));
+  }));
+  r.delete('/shipments/:id', needLog, wrap(async (req, res) => {
+    const x = await store.get('shipments', req.params.id); if (!x) fail(404, 'Envío no encontrado.');
+    if (x.delivery && ['en_ruta', 'entregada'].includes(x.delivery.status)) fail(400, 'El envío ya salió o ya se entregó: queda como historial.');
+    if (x.delivery && x.delivery.routeId) {
+      const rt = await store.get('delivroutes', x.delivery.routeId);
+      if (rt && rt.status !== 'terminada') { rt.stops.forEach(st => { st.saleIds = st.saleIds.filter(id => id !== x.id); }); rt.stops = rt.stops.filter(st => st.saleIds.length); await store.put('delivroutes', rt); }
+    }
+    await store.del('shipments', x.id);
+    res.json({ ok: true });
+  }));
+  // bultos de varias ventas o envíos de una vez (antes de imprimir las etiquetas)
+  r.put('/deliveries/packages', needUser, wrap(async (req, res) => {
+    const items = Array.isArray(req.body.items) ? req.body.items.slice(0, 300) : [];
+    const sc = isLog(req.user) ? null : await h.scopeOf(req.user);
+    const out = [];
+    for (const it of items) {
+      const s = await getDoc(str(it.id, 90)); if (!s || !s.delivery) continue;
+      if (sc && (s.kind === 'envio' || !h.canSeeSale(sc, s) || req.user.role !== 'admin')) continue;
+      s.delivery.packages = intPk(it.packages);
+      await putDoc(s); out.push({ id: s.id, packages: s.delivery.packages });
+    }
+    res.json(out);
   }));
 
   // ---------- planificación (logística) ----------
   r.get('/deliveries', needLog, wrap(async (req, res) => {
     const day = str(req.query.day, 10), shift = req.query.shift;
     if (!DAY.test(day) || !SHIFTS[shift]) fail(400, 'Elegí día y turno.');
-    const [sales, clients, routes, trucks, settings] = await Promise.all([store.all('sales'), store.all('clients'), store.all('delivroutes'), store.all('trucks'), store.get('settings', 'main')]);
+    const [sales, clients, routes, trucks, settings] = await Promise.all([allDocs(), store.all('clients'), store.all('delivroutes'), store.all('trucks'), store.get('settings', 'main')]);
     const list = sales.filter(s => s.delivery && s.delivery.day === day && s.delivery.shift === shift && s.status !== 'anulada');
     const cids = new Set(list.map(s => s.clientId).filter(Boolean));
     // ventas sin entrega asignada (para sumarlas) y cuántas entregas hay por día en los próximos días
@@ -155,7 +230,7 @@ module.exports = function entregas(r, h) {
       const ids = (Array.isArray(st.saleIds) ? st.saleIds : []).map(x => str(x, 90));
       const ok = [];
       for (const sid of ids) {
-        const s = await store.get('sales', sid);
+        const s = await getDoc(sid);
         if (!s || !s.delivery || s.status === 'anulada' || s.delivery.day !== day || s.delivery.shift !== shift) continue;
         if (s.delivery.status === 'entregada') continue;
         ok.push(sid); saleIds.add(sid);
@@ -171,10 +246,10 @@ module.exports = function entregas(r, h) {
     });
     await store.put('delivroutes', rt);
     // las ventas quedan en este camión y esta ruta; las que estaban en esta ruta y se sacaron, sin ruta
-    for (const s of await store.all('sales')) {
+    for (const s of await allDocs()) {
       if (!s.delivery) continue;
-      if (saleIds.has(s.id)) { s.delivery.truckId = truck.id; s.delivery.routeId = id; await store.put('sales', s); }
-      else if (s.delivery.routeId === id) { delete s.delivery.routeId; await store.put('sales', s); }
+      if (saleIds.has(s.id)) { s.delivery.truckId = truck.id; s.delivery.routeId = id; await putDoc(s); }
+      else if (s.delivery.routeId === id) { delete s.delivery.routeId; await putDoc(s); }
     }
     if (truck.driverId) await notify([truck.driverId], '🚚 Tenés una ruta para el ' + fmtDay(day) + ' (' + SHIFTS[shift] + ') en ' + truck.name + ': ' + stops.length + ' entrega' + (stops.length > 1 ? 's' : '') + '.', { routeId: id, kind: 'ruta' });
     res.json(rt);
@@ -184,7 +259,7 @@ module.exports = function entregas(r, h) {
     if (rt.status === 'en_curso') fail(400, 'La ruta está en curso.');
     if (rt.status === 'terminada') fail(400, 'La ruta ya terminó: queda para las estadísticas.');
     await store.del('delivroutes', rt.id);
-    for (const s of await store.all('sales')) if (s.delivery && s.delivery.routeId === rt.id) { delete s.delivery.routeId; await store.put('sales', s); }
+    for (const s of await allDocs()) if (s.delivery && s.delivery.routeId === rt.id) { delete s.delivery.routeId; await putDoc(s); }
     res.json({ ok: true });
   }));
 
@@ -196,7 +271,7 @@ module.exports = function entregas(r, h) {
   }
   async function routeDetail(rt) {
     const ids = new Set(rt.stops.flatMap(st => st.saleIds));
-    const sales = (await store.all('sales')).filter(s => ids.has(s.id)).map(saleForDelivery);
+    const sales = (await allDocs()).filter(s => ids.has(s.id)).map(saleForDelivery);
     const cids = new Set(rt.stops.map(st => st.clientId).filter(Boolean));
     const clients = (await store.all('clients')).filter(c => cids.has(c.id)).map(c => ({ id: c.id, name: c.name, address: c.address, phone: c.phone, lat: c.lat, lng: c.lng }));
     return Object.assign({}, rt, { track: undefined, trackCount: (rt.track || []).length, sales, clients });
@@ -212,7 +287,7 @@ module.exports = function entregas(r, h) {
   async function noticeSales(saleIds, textFor) {
     const admins = await adminIds();
     for (const sid of saleIds) {
-      const s = await store.get('sales', sid); if (!s) continue;
+      const s = await getDoc(sid); if (!s) continue;
       await notify([s.userId].concat(admins), textFor(s), { saleId: s.id, kind: 'entrega' });
     }
   }
@@ -223,8 +298,8 @@ module.exports = function entregas(r, h) {
     const p = req.body.pos; if (p && isFinite(p.lat) && isFinite(p.lng)) rt.track.push({ lat: +p.lat, lng: +p.lng, t: Date.now() });
     await store.put('delivroutes', rt);
     const ids = rt.stops.filter(st => !st.result).flatMap(st => st.saleIds);
-    for (const sid of ids) { const s = await store.get('sales', sid); if (s && s.delivery) { s.delivery.status = 'en_ruta'; await store.put('sales', s); } }
-    await noticeSales(ids, s => '🚚 En camino: venta N.º ' + s.number + ' a ' + s.clientName + ' (' + rt.truckName + ').');
+    for (const sid of ids) { const s = await getDoc(sid); if (s && s.delivery) { s.delivery.status = 'en_ruta'; await putDoc(s); } }
+    await noticeSales(ids, s => '🚚 En camino: ' + refOf(s) + ' a ' + s.clientName + ' (' + rt.truckName + ').');
     res.json(await routeDetail(rt));
   }));
   // puntos de GPS mientras la ruta está en curso (para los km recorridos)
@@ -252,24 +327,24 @@ module.exports = function entregas(r, h) {
       const amount = Math.max(0, round2(Number(String(req.body.amount || 0).replace(',', '.')) || 0));
       let left = amount;
       for (const sid of st.saleIds) {
-        const s = await store.get('sales', sid); if (!s || !s.delivery) continue;
+        const s = await getDoc(sid); if (!s || !s.delivery) continue;
         s.delivery.status = 'entregada'; s.delivery.deliveredAt = now; s.delivery.deliveredBy = req.user.name;
         if (note) s.delivery.deliveryNote = note;
-        if (s.status === 'pendiente' && s.list !== 'remar' && method !== 'Cuenta corriente' && left > 0) {
+        if (s.kind === 'envio') { /* sin cobro */ } else if (s.status === 'pendiente' && s.list !== 'remar' && method !== 'Cuenta corriente' && left > 0) {
           const pay = Math.min(left, s.total); left = round2(left - pay); collected = round2(collected + pay);
           s.delivery.collected = { amount: pay, method, at: now, by: req.user.name };
           if (pay >= s.total - 0.009) { s.status = 'entregada'; s.paidAt = now; s.payment = method; } // cobrada: cuenta para la comisión
         } else if (s.status !== 'pendiente') s.status = 'entregada';
-        await store.put('sales', s);
+        await putDoc(s);
       }
       st.collected = collected; st.method = method;
     } else {
       st.reason = str(req.body.reason, 80) || 'No se pudo entregar';
       for (const sid of st.saleIds) {
-        const s = await store.get('sales', sid); if (!s || !s.delivery) continue;
+        const s = await getDoc(sid); if (!s || !s.delivery) continue;
         s.delivery.status = 'no_entregada'; s.delivery.failedAt = now; s.delivery.failReason = st.reason + (note ? ': ' + note : '');
         delete s.delivery.routeId;
-        await store.put('sales', s);
+        await putDoc(s);
       }
     }
     st.result = result; st.at = now; st.note = note;
@@ -277,8 +352,8 @@ module.exports = function entregas(r, h) {
     if (rt.stops.every(x => x.result)) finish(rt, req.user.name);
     await store.put('delivroutes', rt);
     await noticeSales(st.saleIds, s => result === 'entregada'
-      ? '✅ Entregada: venta N.º ' + s.number + ' a ' + s.clientName + (s.delivery && s.delivery.collected ? ' · cobró $' + s.delivery.collected.amount.toLocaleString('es-UY') + ' (' + s.delivery.collected.method + ')' : s.status === 'pendiente' ? ' · quedó pendiente de cobro' : '') + '.'
-      : '⚠️ No se entregó: venta N.º ' + s.number + ' a ' + s.clientName + ' · ' + st.reason + (note ? ' (' + note + ')' : '') + '. Hay que reprogramarla.');
+      ? '✅ Entregada: ' + refOf(s) + ' a ' + s.clientName + (s.delivery && s.delivery.collected ? ' · cobró $' + s.delivery.collected.amount.toLocaleString('es-UY') + ' (' + s.delivery.collected.method + ')' : s.status === 'pendiente' ? ' · quedó pendiente de cobro' : '') + '.'
+      : '⚠️ No se entregó: ' + refOf(s) + ' a ' + s.clientName + ' · ' + st.reason + (note ? ' (' + note + ')' : '') + '. Hay que reprogramarla.');
     res.json(await routeDetail(rt));
   }));
   function trackKm(track) {
@@ -297,7 +372,7 @@ module.exports = function entregas(r, h) {
     // lo que quedó sin cerrar vuelve a pendiente para reprogramar
     for (const st of rt.stops) if (!st.result) {
       st.result = 'no_entregada'; st.reason = 'Sin visitar';
-      for (const sid of st.saleIds) { const s = await store.get('sales', sid); if (s && s.delivery) { s.delivery.status = 'pendiente'; delete s.delivery.routeId; await store.put('sales', s); } }
+      for (const sid of st.saleIds) { const s = await getDoc(sid); if (s && s.delivery) { s.delivery.status = 'pendiente'; delete s.delivery.routeId; await putDoc(s); } }
     }
     finish(rt, req.user.name);
     await store.put('delivroutes', rt);

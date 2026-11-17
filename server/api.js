@@ -429,8 +429,8 @@ module.exports = function api() {
   r.get('/backup', needAdmin, wrap(async (req, res) => {
     const [products, clients, sales, settings] = await Promise.all([store.all('products'), store.all('clients'), store.all('sales'), getSettings()]);
     // terreno: se incluye para tener copia (restaurar respaldo no los toca)
-    const [zones, routes, recorridos, visits, profiles, commissions, commissionPayments] = await Promise.all(['zones', 'routes', 'recorridos', 'visits', 'profiles', 'commissions', 'compays'].map(k => store.all(k)));
-    res.json({ app: 'SVC', version: 2, exportedAt: new Date().toISOString(), settings, products, clients, sales, zones, routes, recorridos, visits, profiles, commissions, commissionPayments });
+    const [zones, routes, recorridos, visits, profiles, commissions, commissionPayments, trucks, deliveryRoutes, shipments] = await Promise.all(['zones', 'routes', 'recorridos', 'visits', 'profiles', 'commissions', 'compays', 'trucks', 'delivroutes', 'shipments'].map(k => store.all(k)));
+    res.json({ app: 'SVC', version: 2, exportedAt: new Date().toISOString(), settings, products, clients, sales, zones, routes, recorridos, visits, profiles, commissions, commissionPayments, trucks, deliveryRoutes, shipments });
   }));
   r.post('/import', needAdmin, wrap(async (req, res) => {
     const b = req.body, replace = b.mode === 'replace';

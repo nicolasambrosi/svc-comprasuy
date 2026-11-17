@@ -73,10 +73,11 @@
   function planTab(el, box) {
     box.innerHTML = '<div class="toolbar"><input type="date" id="lgDay" value="' + L.day + '" aria-label="Día">' +
       '<select id="lgShift">' + Object.keys(SH()).map(function (k) { return '<option value="' + k + '"' + (k === L.shift ? ' selected' : '') + '>Turno ' + SH()[k].toLowerCase() + '</option>'; }).join('') + '</select>' +
-      '<button class="btn" id="lgDepot">📍 Depósito</button></div><div id="lgUp" class="chips"></div><div id="lgPlan"><div class="card empty">Cargando…</div></div>';
+      '<button class="btn" id="lgDepot">📍 Depósito</button><button class="btn primary" id="lgShip">+ Nuevo envío</button></div><div id="lgUp" class="chips"></div><div id="lgPlan"><div class="card empty">Cargando…</div></div>';
     $('#lgDay', box).addEventListener('change', function () { if (this.value) { L.day = this.value; L.order = {}; load(); } });
     $('#lgShift', box).addEventListener('change', function () { L.shift = this.value; L.order = {}; load(); });
     $('#lgDepot', box).addEventListener('click', function () { depotModal(function () { load(); }); });
+    $('#lgShip', box).addEventListener('click', function () { shipmentModal(null, load); });
     function load() {
       api('GET', '/deliveries?day=' + L.day + '&shift=' + L.shift).then(function (d) { L.data = d; if (alive(el, 'logistica')) draw(); },
         function (e) { $('#lgPlan', box).innerHTML = '<div class="card empty">' + esc(e.message) + '</div>'; });
@@ -101,8 +102,10 @@
         // una parada por cliente; las de Consumidor final, una por venta (cada una con su dirección)
         var key = s.clientId || 'v' + s.id;
         var g = groups[tid] = groups[tid] || {}, c = clients[s.clientId] || {};
-        var st = g[key] = g[key] || { key: key, clientId: s.clientId, clientName: s.clientName, address: s.deliveryAddress || c.address || '', phone: s.deliveryPhone || c.phone || '', lat: c.lat, lng: c.lng, saleIds: [], due: 0, items: 0, sellers: {}, status: del.status };
-        st.saleIds.push(s.id); st.due += s.due || 0; st.items += s.items.reduce(function (a, it) { return a + it.qty; }, 0); st.sellers[s.userName || ''] = 1;
+        var st = g[key] = g[key] || { key: key, clientId: s.clientId, clientName: s.clientName, address: s.deliveryAddress || c.address || '', phone: s.deliveryPhone || c.phone || '', contact: s.deliveryContact || '', lat: c.lat, lng: c.lng, saleIds: [], docs: [], due: 0, items: 0, sellers: {}, status: del.status, day: del.day, shift: del.shift, truckId: tid };
+        st.saleIds.push(s.id); st.docs.push(s); st.due += s.due || 0; st.items += s.items.reduce(function (a, it) { return a + it.qty; }, 0);
+        if (s.kind !== 'envio') st.sellers[s.userName || ''] = 1;
+        if (!st.contact && s.deliveryContact) st.contact = s.deliveryContact;
         if (del.status === 'en_ruta') st.status = 'en_ruta';
       });
       var routeOf = function (tid) { return d.routes.filter(function (r) { return r.truckId === tid; })[0]; };
@@ -114,12 +117,18 @@
       };
       var truckOpts = function (cur) { return '<option value="">Sin camión</option>' + trucks.map(function (t) { return '<option value="' + t.id + '"' + (t.id === cur ? ' selected' : '') + '>' + esc(t.name) + '</option>'; }).join(''); };
       var stopRow = function (st, i, tid, locked) {
+        var nv = st.docs.filter(function (x) { return x.kind !== 'envio'; }).length, ne = st.docs.length - nv, pk = packagesOf(st.docs);
         return '<div class="stop-row' + (hasGeo(st) ? '' : ' nogeo') + '"><span class="stop-n">' + (tid ? i + 1 : '•') + '</span><div class="stop-main"><b>' + esc(st.clientName) + '</b>' +
           '<div class="small muted">' + esc(st.address || 'Sin dirección') + (hasGeo(st) ? '' : ' · <span class="warn">sin ubicar en el mapa</span>') + '</div>' +
-          '<div class="small">' + st.saleIds.length + ' venta' + (st.saleIds.length > 1 ? 's' : '') + ' · ' + st.items + ' art.' + (st.due ? ' · cobrar <b>' + money(st.due) + '</b>' : ' · pago') +
-          ' · <span class="muted">' + esc(Object.keys(st.sellers).filter(Boolean).join(', ')) + '</span></div></div>' +
-          (locked ? '<span class="pill pendiente">' + (st.status === 'en_ruta' ? 'en camino' : '') + '</span>' :
-            (tid ? '<div class="stop-act"><button class="btn sm" data-up1="' + tid + '|' + i + '" title="Subir">↑</button><button class="btn sm" data-dn1="' + tid + '|' + i + '" title="Bajar">↓</button></div>' : '') +
+          '<div class="small">' + [nv ? nv + ' venta' + (nv > 1 ? 's' : '') + ' · ' + st.items + ' art.' : '', ne ? ne + ' envío' + (ne > 1 ? 's' : '') : ''].filter(Boolean).join(' · ') +
+          (nv ? (st.due ? ' · cobrar <b>' + money(st.due) + '</b>' : ' · pago') : '') + (pk ? ' · <b>' + pk + ' bulto' + (pk > 1 ? 's' : '') + '</b>' : '') +
+          (nv ? ' · <span class="muted">' + esc(Object.keys(st.sellers).filter(Boolean).join(', ')) + '</span>' : '') + '</div>' +
+          st.docs.filter(function (x) { return x.kind === 'envio'; }).map(function (x) {
+            return '<div class="small">📦 Envío E-' + x.number + (x.description ? ' · ' + esc(x.description) : '') + (locked ? '' : ' <button class="btn link" data-ship="' + x.id + '">Editar</button>') + '</div>';
+          }).join('') + '</div>' +
+          '<div class="stop-act"><button class="btn sm" data-lbl="' + tid + '|' + st.key + '" title="Etiquetas por bulto">🏷' + (pk ? ' ' + pk : '') + '</button>' +
+          (locked ? '<span class="pill pendiente">' + (st.status === 'en_ruta' ? 'en camino' : '') + '</span></div>' :
+            (tid ? '<button class="btn sm" data-up1="' + tid + '|' + i + '" title="Subir">↑</button><button class="btn sm" data-dn1="' + tid + '|' + i + '" title="Bajar">↓</button>' : '') + '</div>' +
             '<select data-mv="' + st.saleIds.join(',') + '" aria-label="Camión">' + truckOpts(tid) + '</select>') + '</div>';
       };
       var html = '';
@@ -128,7 +137,7 @@
       var free = ordered('');
       html += '<div class="lg-grid">';
       html += '<div class="card"><h2>Sin camión <span class="muted small">(' + free.length + ')</span></h2>' + (free.length ? free.map(function (st, i) { return stopRow(st, i, '', false); }).join('') : '<p class="muted small">Todas las entregas de este día y turno tienen camión.</p>') +
-        (free.length && trucks.length ? '<button class="btn sm" id="lgAuto">Repartir entre camiones por cercanía</button>' : '') + '</div>';
+        '<div class="truck-act">' + (free.length && trucks.length ? '<button class="btn sm" id="lgAuto">Repartir entre camiones por cercanía</button>' : '') + (free.length ? '<button class="btn sm" data-lblt="">🏷 Etiquetas</button>' : '') + '</div></div>';
       trucks.forEach(function (t) {
         var rt = routeOf(t.id), list = ordered(t.id), locked = rt && rt.status !== 'lista';
         var drv = byId(db().users || [], t.driverId);
@@ -137,18 +146,27 @@
           (rt ? '<span class="pill ' + ROUTE_ST[rt.status][1] + '">' + ROUTE_ST[rt.status][0] + '</span>' : '<span class="pill">sin guardar</span>') + '</div>' +
           '<p class="small muted" style="margin:0 0 8px">Chofer: ' + (drv ? esc(drv.name) : '<span class="warn">sin chofer</span>') + ' · ' + list.length + ' parada' + (list.length === 1 ? '' : 's') + (m > 0 ? ' · ≈ ' + fmtKm(m) + ' (estimado, ida y vuelta)' : '') + '</p>' +
           (list.length ? list.map(function (st, i) { return stopRow(st, i, t.id, locked); }).join('') : '<p class="muted small">Sin entregas.</p>') +
-          (list.length && !locked ? '<div class="truck-act"><button class="btn sm" data-opt="' + t.id + '">✨ Armar mejor ruta</button><button class="btn sm" data-map="' + t.id + '">🗺️ Mapa</button>' +
+          (list.length && !locked ? '<div class="truck-act"><button class="btn sm" data-opt="' + t.id + '">✨ Armar mejor ruta</button><button class="btn sm" data-map="' + t.id + '">🗺️ Mapa</button><button class="btn sm" data-lblt="' + t.id + '">🏷 Etiquetas</button>' +
             '<button class="btn sm primary" data-save="' + t.id + '">' + (rt ? 'Guardar cambios' : 'Guardar y enviar al chofer') + '</button></div>' : '') +
-          (locked ? '<div class="truck-act"><button class="btn sm" data-map="' + t.id + '">🗺️ Mapa</button></div>' : '') +
+          (locked ? '<div class="truck-act"><button class="btn sm" data-map="' + t.id + '">🗺️ Mapa</button>' + (list.length ? '<button class="btn sm" data-lblt="' + t.id + '">🏷 Etiquetas</button>' : '') + '</div>' : '') +
           '<div class="map-box" id="lgMap-' + t.id + '" hidden></div></div>';
       });
       html += '</div>';
       if (done.length) html += '<div class="card"><h2>Ya cerradas <span class="muted small">(' + done.length + ')</span></h2>' + done.map(function (s) {
-        return '<div class="small">N.º ' + s.number + ' · ' + esc(s.clientName) + ' ' + S.deliveryPill(s.delivery) + (s.delivery.failReason ? ' <span class="muted">' + esc(s.delivery.failReason) + '</span>' : '') + '</div>';
+        return '<div class="small">' + (s.kind === 'envio' ? 'Envío E-' : 'N.º ') + s.number + ' · ' + esc(s.clientName) + ' ' + S.deliveryPill(s.delivery) + (s.delivery.failReason ? ' <span class="muted">' + esc(s.delivery.failReason) + '</span>' : '') + '</div>';
       }).join('') + '<p class="muted small">Las no entregadas se reprograman desde Ventas → Ver → Cambiar entrega.</p></div>';
-      if (!d.sales.length) html = '<div class="card empty">No hay entregas para el ' + esc(dayLabel(L.day)) + ' (turno ' + esc(SH()[L.shift].toLowerCase()) + '). Las entregas se programan al hacer la venta.</div>' + html.replace(/<div class="lg-grid">[\s\S]*$/, '');
+      if (!d.sales.length) html = '<div class="card empty">No hay entregas para el ' + esc(dayLabel(L.day)) + ' (turno ' + esc(SH()[L.shift].toLowerCase()) + '). Se programan desde Ventas (columna Entrega) o con <b>+ Nuevo envío</b>.</div>' + html.replace(/<div class="lg-grid">[\s\S]*$/, '');
       $('#lgPlan', box).innerHTML = html;
       var P = $('#lgPlan', box);
+      var truckName = function (tid) { var t = byId(d.trucks, tid); return t ? t.name : ''; };
+      var toGroup = function (st) { return { clientName: st.clientName, address: st.address, contact: st.contact, phone: st.phone, day: L.day, shift: L.shift, truckName: truckName(st.truckId), docs: st.docs }; };
+      $$('[data-lbl]', P).forEach(function (b) {
+        b.addEventListener('click', function () { var p = b.dataset.lbl.split('|'); labelsModal([toGroup(groups[p[0]][p[1]])], draw); });
+      });
+      $$('[data-lblt]', P).forEach(function (b) {
+        b.addEventListener('click', function () { labelsModal(ordered(b.dataset.lblt).map(toGroup), draw); });
+      });
+      $$('[data-ship]', P).forEach(function (b) { b.addEventListener('click', function () { shipmentModal(byId(d.sales, b.dataset.ship), load); }); });
       $$('[data-mv]', P).forEach(function (s) {
         s.addEventListener('change', function () {
           var ids = s.dataset.mv.split(','), tid = s.value; s.disabled = true;
@@ -234,6 +252,133 @@
       });
     }, true);
   }
+
+  // ---------- envío sin venta a un cliente registrado ----------
+  var clientsCache = null;
+  function shipmentModal(x, after) {
+    var dl = (x && x.delivery) || {};
+    (clientsCache ? Promise.resolve(clientsCache) : api('GET', '/shipments/clients')).then(function (cl) {
+      clientsCache = cl;
+      var trucks = ((L.data && L.data.trucks) || []).filter(function (t) { return t.active !== false; });
+      var cur = x ? byId(cl, x.clientId) : null;
+      S.openModal(x ? 'Envío E-' + x.number : 'Nuevo envío', '<form class="form" id="shF">' +
+        '<label class="f full">Cliente registrado<input name="client" list="shCl" required autocomplete="off" placeholder="Escribí el nombre y elegilo de la lista" value="' + esc(cur ? cur.name : '') + '"></label>' +
+        '<datalist id="shCl">' + cl.map(function (c) { return '<option value="' + esc(c.name) + '">' + esc(c.address || '') + '</option>'; }).join('') + '</datalist>' +
+        '<label class="f full">Dirección de entrega<input name="deliveryAddress" value="' + esc(x ? x.deliveryAddress : '') + '" placeholder="Se completa con la del cliente"></label>' +
+        '<label class="f">Contacto (quién recibe)<input name="deliveryContact" value="' + esc(x ? x.deliveryContact : '') + '" placeholder="Nombre"></label>' +
+        '<label class="f">Teléfono<input name="deliveryPhone" type="tel" value="' + esc(x ? x.deliveryPhone : '') + '"></label>' +
+        '<label class="f full">Qué se envía<input name="description" value="' + esc(x ? x.description : '') + '" placeholder="Ej.: cambio de mercadería, muestras, devolución de envases"></label>' +
+        '<label class="f">Bultos<input name="packages" type="number" min="0" max="999" value="' + (dl.packages || 1) + '"></label>' +
+        '<label class="f">Día<input name="day" type="date" required value="' + (dl.day || L.day || S.nextWorkDay()) + '"></label>' +
+        '<label class="f">Turno<select name="shift">' + Object.keys(SH()).map(function (k) { return '<option value="' + k + '"' + (k === (dl.shift || L.shift) ? ' selected' : '') + '>' + SH()[k] + '</option>'; }).join('') + '</select></label>' +
+        '<label class="f">Camión<select name="truckId"><option value="">Sin camión todavía</option>' + trucks.map(function (t) { return '<option value="' + t.id + '"' + (t.id === dl.truckId ? ' selected' : '') + '>' + esc(t.name) + '</option>'; }).join('') + '</select></label>' +
+        '<label class="f full">Nota para el chofer (opcional)<input name="notes" value="' + esc(x ? x.notes : '') + '"></label>' +
+        '<div class="foot full"><button type="button" class="btn" data-close>Cancelar</button>' + (x ? '<button type="button" class="btn danger" id="shDel">Borrar envío</button>' : '') + '<button class="btn primary">Guardar</button></div></form>', function (m) {
+        var f = $('#shF', m), E = f.elements;
+        var find = function () { var v = E.client.value.trim().toLowerCase(); return cl.filter(function (c) { return c.name.toLowerCase() === v; })[0]; };
+        E.client.addEventListener('change', function () {
+          var c = find(); if (!c) return;
+          E.deliveryAddress.value = c.address || ''; E.deliveryPhone.value = c.phone || '';
+        });
+        var del = $('#shDel', m);
+        if (del) del.addEventListener('click', function () {
+          if (!confirm('¿Borrar el envío E-' + x.number + '?')) return;
+          api('DELETE', '/shipments/' + x.id).then(function () { S.closeModal(); toast('Envío borrado'); after(); }, function (e) { toast(e.message, true); });
+        });
+        f.addEventListener('submit', function (e) {
+          e.preventDefault();
+          var c = find(); if (!c) { toast('Elegí un cliente de la lista (tiene que estar registrado en Clientes).', true); E.client.focus(); return; }
+          var o = { clientId: c.id, deliveryAddress: E.deliveryAddress.value.trim(), deliveryContact: E.deliveryContact.value.trim(), deliveryPhone: E.deliveryPhone.value.trim(), description: E.description.value.trim(), packages: E.packages.value, day: E.day.value, shift: E.shift.value, truckId: E.truckId.value, notes: E.notes.value.trim() };
+          var btn = $('button.primary', f); btn.disabled = true;
+          api(x ? 'PUT' : 'POST', '/shipments' + (x ? '/' + x.id : ''), o).then(function (r) {
+            S.closeModal(); toast((x ? 'Envío actualizado' : 'Envío E-' + r.number + ' creado') + ' · ' + dayLabel(r.delivery.day));
+            if (r.delivery.day !== L.day || r.delivery.shift !== L.shift) { L.day = r.delivery.day; L.shift = r.delivery.shift; }
+            after(r);
+          }, function (er) { toast(er.message, true); btn.disabled = false; });
+        });
+      });
+    }, function (e) { toast(e.message, true); });
+  }
+
+  // ======================================================================
+  // ETIQUETAS: una por bulto, con cliente, dirección, contacto, día y turno
+  // ======================================================================
+  var packagesOf = function (docs) { return docs.reduce(function (a, s) { return a + ((s.delivery && s.delivery.packages) || 0); }, 0); };
+  var refOf = function (s) { return s.kind === 'envio' ? 'Envío E-' + s.number : 'Venta N.º ' + s.number; };
+  var LBL_FMT = { rollo: 'Etiquetadora · 10 × 7 cm (una por hoja)', a4: 'Hoja A4 · 8 etiquetas por hoja' };
+  var lblPref = function () { try { return localStorage.getItem('svc.lblfmt') || 'rollo'; } catch (e) { return 'rollo'; } };
+  // groups: [{ clientName, address, contact, phone, day, shift, truckName, docs: [venta o envío] }]
+  function labelsModal(groups, after) {
+    var rows = [];
+    groups.forEach(function (g, gi) { g.docs.forEach(function (s) { rows.push({ g: gi, s: s }); }); });
+    S.openModal('🏷 Etiquetas de entrega', '<p class="muted small">Poné cuántos bultos lleva cada entrega: sale una etiqueta por bulto (ej.: "Bulto 2 de 3").</p>' +
+      '<div class="tbl-wrap"><table><thead><tr><th>Cliente</th><th>Entrega</th><th class="num">Bultos</th></tr></thead><tbody>' + rows.map(function (r, i) {
+        var g = groups[r.g];
+        return '<tr><td><b>' + esc(g.clientName) + '</b><div class="small muted">' + esc(g.address || 'Sin dirección') + '</div></td><td class="small">' + esc(refOf(r.s)) + (r.s.description ? '<div class="muted">' + esc(r.s.description) + '</div>' : '') + '</td>' +
+          '<td class="num"><input type="number" min="0" max="999" data-pk="' + i + '" value="' + ((r.s.delivery && r.s.delivery.packages) || 1) + '" style="width:70px"></td></tr>';
+      }).join('') + '</tbody></table></div>' +
+      '<div class="form"><label class="f full">Formato<select id="lbFmt">' + Object.keys(LBL_FMT).map(function (k) { return '<option value="' + k + '"' + (k === lblPref() ? ' selected' : '') + '>' + LBL_FMT[k] + '</option>'; }).join('') + '</select></label></div>' +
+      '<div class="foot"><button class="btn" data-close>Cancelar</button><button class="btn primary" id="lbGo">Imprimir</button></div>', function (m) {
+      var count = function () { return $$('[data-pk]', m).reduce(function (a, inp) { return a + Math.max(0, Math.round(+inp.value || 0)); }, 0); };
+      var upd = function () { var n = count(); $('#lbGo', m).textContent = 'Imprimir ' + n + ' etiqueta' + (n === 1 ? '' : 's'); };
+      $$('[data-pk]', m).forEach(function (inp) { inp.addEventListener('input', upd); }); upd();
+      $('#lbGo', m).addEventListener('click', function () {
+        var n = count(); if (!n) return toast('Poné al menos un bulto.', true);
+        var fmt = $('#lbFmt', m).value; try { localStorage.setItem('svc.lblfmt', fmt); } catch (e) { /* nada */ }
+        var items = $$('[data-pk]', m).map(function (inp) { var r = rows[+inp.dataset.pk]; return { id: r.s.id, packages: Math.max(0, Math.round(+inp.value || 0)) }; });
+        var b = this; b.disabled = true;
+        api('PUT', '/deliveries/packages', { items: items }).then(function () {
+          items.forEach(function (it, i) { var s = rows[i].s; if (s.delivery) s.delivery.packages = it.packages; var o = byId(db().sales || [], it.id); if (o && o !== s && o.delivery) o.delivery.packages = it.packages; });
+          S.closeModal(); printLabels(groups, fmt); if (after) after();
+        }, function (e) { toast(e.message, true); b.disabled = false; });
+      });
+    }, true);
+  }
+  function printLabels(groups, fmt) {
+    var co = (db().settings && db().settings.company) || '', labels = [];
+    groups.forEach(function (g) {
+      var total = packagesOf(g.docs); if (!total) return;
+      var refs = g.docs.filter(function (s) { return s.delivery && s.delivery.packages; }).map(refOf).join(' · ');
+      var dayTxt = dayLabel(g.day) + ' · turno ' + (SH()[g.shift] || '').toLowerCase();
+      for (var i = 1; i <= total; i++) {
+        labels.push('<div class="lbl"><div class="l-top"><span>' + esc(co) + '</span><b>Bulto ' + i + ' de ' + total + '</b></div>' +
+          '<div class="l-cli">' + esc(g.clientName) + '</div>' +
+          '<div class="l-row"><small>Dirección</small>' + esc(g.address || '—') + '</div>' +
+          '<div class="l-row"><small>Contacto</small>' + esc([g.contact, g.phone].filter(Boolean).join(' · ') || '—') + '</div>' +
+          '<div class="l-day">' + esc(dayTxt.charAt(0).toUpperCase() + dayTxt.slice(1)) + '</div>' +
+          '<div class="l-foot">' + esc([g.truckName, refs].filter(Boolean).join(' · ')) + '</div></div>');
+      }
+    });
+    var a4 = fmt === 'a4';
+    var css = '*{box-sizing:border-box}body{margin:0;font-family:Arial,Helvetica,sans-serif;color:#000}' +
+      '.lbl{width:100mm;height:70mm;padding:4mm 5mm;display:flex;flex-direction:column;gap:1.6mm;overflow:hidden;' + (a4 ? 'border:0.3mm dashed #999;' : 'page-break-after:always;') + '}' +
+      '.l-top{display:flex;justify-content:space-between;align-items:center;font-size:9pt;border-bottom:0.5mm solid #000;padding-bottom:1.2mm}.l-top b{font-size:12pt}' +
+      '.l-cli{font-size:17pt;font-weight:bold;line-height:1.1;max-height:13mm;overflow:hidden}' +
+      '.l-row{font-size:10.5pt;line-height:1.2;max-height:10mm;overflow:hidden}.l-row small{display:block;font-size:7pt;text-transform:uppercase;color:#444;letter-spacing:.3px}' +
+      '.l-day{margin-top:auto;font-size:13pt;font-weight:bold;border:0.5mm solid #000;border-radius:1.5mm;padding:1mm 2mm;text-align:center}' +
+      '.l-foot{font-size:8pt;color:#333;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
+      (a4 ? '@page{size:A4;margin:5mm}.grid{display:grid;grid-template-columns:100mm 100mm;justify-content:center}.lbl{break-inside:avoid}'
+        : '@page{size:100mm 70mm;margin:0}');
+    var html = '<!doctype html><html><head><meta charset="utf-8"><title>Etiquetas</title><style>' + css + '</style></head><body>' + (a4 ? '<div class="grid">' + labels.join('') + '</div>' : labels.join('')) + '</body></html>';
+    var old = $('#print-frame'); if (old) old.remove();
+    var fr = document.createElement('iframe');
+    fr.id = 'print-frame'; fr.setAttribute('aria-hidden', 'true');
+    fr.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden';
+    document.body.appendChild(fr);
+    var doc = fr.contentWindow.document; doc.open(); doc.write(html); doc.close();
+    S.lastLabelsHtml = html; // para revisar
+    setTimeout(function () { fr.contentWindow.focus(); fr.contentWindow.print(); }, 250);
+  }
+  // desde Ventas (administrador): etiquetas de una o varias ventas
+  S.labelsForSales = function (sales) {
+    var groups = sales.filter(function (s) { return s.delivery; }).map(function (s) {
+      var c = s.clientId ? byId(db().clients || [], s.clientId) : null, t = byId(db().trucks || [], s.delivery.truckId);
+      return { clientName: s.clientName, address: s.deliveryAddress || (c && c.address) || '', contact: s.deliveryContact || '', phone: s.deliveryPhone || (c && c.phone) || '', day: s.delivery.day, shift: s.delivery.shift, truckName: t ? t.name : '', docs: [s] };
+    });
+    if (!groups.length) return toast('Primero programá la entrega (día y turno).', true);
+    labelsModal(groups, function () { S.render(); });
+  };
+  S.labelsModal = labelsModal;
 
   // ---------- camiones ----------
   function trucksTab(el, box) {
@@ -350,9 +495,10 @@
         var res = st.result === 'entregada' ? '<span class="pill pagada">entregada' + (st.collected ? ' · cobró ' + money(st.collected) : '') + '</span>' : st.result === 'no_entregada' ? '<span class="pill anulada">no entregada · ' + esc(st.reason || '') + '</span>' : '';
         return '<div class="card stop-card' + (st.result ? ' done' : '') + '"><div class="stop-head"><span class="stop-n big">' + (i + 1) + '</span><div><b>' + esc(st.clientName) + '</b><div class="small muted">' + esc(st.address || c.address || 'Sin dirección') + '</div></div>' + res + '</div>' +
           ss.map(function (s) {
+            if (s.kind === 'envio') return '<div class="small stop-sale"><b>📦 Envío E-' + s.number + '</b>' + (s.description ? ' · ' + esc(s.description) : '') + (s.notes ? '<div class="muted">Nota: ' + esc(s.notes) + '</div>' : '') + '</div>';
             return '<div class="small stop-sale"><b>N.º ' + s.number + '</b>' + (s.private ? ' · pedido interno' : ' · ' + s.items.map(function (it) { return it.qty + ' × ' + esc(it.name); }).join(', ')) + (s.notes ? '<div class="muted">Nota: ' + esc(s.notes) + '</div>' : '') + '</div>';
           }).join('') +
-          '<div class="small" style="margin:6px 0">' + (dueAmt ? 'A cobrar: <b>' + money(dueAmt) + '</b>' : '<span class="muted">Ya está paga</span>') + '</div>' +
+          '<div class="small" style="margin:6px 0">' + (packagesOf(ss) ? '<b>' + packagesOf(ss) + ' bulto' + (packagesOf(ss) > 1 ? 's' : '') + '</b> · ' : '') + (ss.some(function (s) { return s.deliveryContact; }) ? 'Recibe: ' + esc(ss.filter(function (s) { return s.deliveryContact; })[0].deliveryContact) + ' · ' : '') + (dueAmt ? 'A cobrar: <b>' + money(dueAmt) + '</b>' : '<span class="muted">Ya está paga</span>') + '</div>' +
           '<div class="stop-btns"><a class="btn sm" target="svc_mapa" rel="noopener" href="' + mapsLink({ lat: st.lat, lng: st.lng, address: st.address, clientName: st.clientName }) + '">🧭 Cómo llegar</a>' +
           (telLink(phone) ? '<a class="btn sm" href="' + telLink(phone) + '">📞 Llamar</a>' : '') +
           (!st.result && cur.status === 'en_curso' ? '<button class="btn sm primary" data-ok="' + i + '">✓ Entregado</button><button class="btn sm" data-no="' + i + '">✕ No se entregó</button>' : '') + '</div></div>';

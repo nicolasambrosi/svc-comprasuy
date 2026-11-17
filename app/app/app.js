@@ -568,7 +568,8 @@
         if (delCol) {
           var t = s.delivery ? byId(db.trucks || [], s.delivery.truckId) : null;
           del = '<td class="small deliv-cell">' + (s.delivery ? '🚚 ' + esc(deliveryText(s.delivery, true)) + '<div>' + (t ? esc(t.name) : '<span class="muted">sin camión</span>') + ' ' + deliveryPill(s.delivery) + '</div>' : '') +
-            (canSched(s) ? '<button class="btn sm' + (s.delivery ? '' : ' primary') + '" data-sched="' + s.id + '">' + (s.delivery ? 'Cambiar' : '🚚 Programar') + '</button>' : (s.delivery ? '' : '<span class="muted">—</span>')) + '</td>';
+            (canSched(s) ? '<button class="btn sm' + (s.delivery ? '' : ' primary') + '" data-sched="' + s.id + '">' + (s.delivery ? 'Cambiar' : '🚚 Programar') + '</button>' : (s.delivery ? '' : '<span class="muted">—</span>')) +
+            (isAdmin() && s.delivery && s.status !== 'anulada' ? ' <button class="btn sm" data-lbls="' + s.id + '" title="Imprimir etiquetas por bulto">🏷' + (s.delivery.packages ? ' ' + s.delivery.packages : '') + '</button>' : '') + '</td>';
         }
         return '<tr><td>' + s.number + '</td><td>' + fmtDateTime(s.date) + '</td><td>' + esc(s.clientName) + '</td>' +
           (compact ? '' : '<td>' + esc(s.payment) + '</td>') +
@@ -581,6 +582,7 @@
   function bindSalesTable(el, after) {
     $$('[data-view]', el).forEach(function (b) { b.addEventListener('click', function () { showReceipt(byId(db.sales, b.dataset.view)); }); });
     $$('[data-sched]', el).forEach(function (b) { b.addEventListener('click', function () { deliveryModal(byId(db.sales, b.dataset.sched)); }); });
+    $$('[data-lbls]', el).forEach(function (b) { b.addEventListener('click', function () { window.SVC.labelsForSales([byId(db.sales, b.dataset.lbls)]); }); });
     $$('[data-status]', el).forEach(function (sel) {
       sel.addEventListener('change', function () {
         var s = byId(db.sales, sel.dataset.status);
@@ -781,10 +783,12 @@
       { name: 'day', label: 'Día de entrega (vacío = sin entrega)', type: 'date' },
       { name: 'shift', label: 'Turno', type: 'select', options: Object.keys(SHIFT_NAMES).map(function (k) { return { v: k, t: SHIFT_NAMES[k] }; }) },
       { name: 'deliveryAddress', label: 'Dirección de entrega', full: true, ph: 'Calle, número, apto., barrio' },
-      { name: 'deliveryPhone', label: 'Teléfono de quien recibe', type: 'tel' }
+      { name: 'deliveryContact', label: 'Contacto (quién recibe)', ph: 'Nombre' },
+      { name: 'deliveryPhone', label: 'Teléfono de quien recibe', type: 'tel' },
+      { name: 'packages', label: 'Bultos (para las etiquetas)', type: 'number', ph: '0' }
     ], {
       truckId: d.truckId || (trucks.length === 1 ? trucks[0].id : ''), day: d.day || nextWorkDay(), shift: d.shift || 'manana',
-      deliveryAddress: s.deliveryAddress || (c && c.address) || '', deliveryPhone: s.deliveryPhone || (c && c.phone) || ''
+      deliveryAddress: s.deliveryAddress || (c && c.address) || '', deliveryPhone: s.deliveryPhone || (c && c.phone) || '', deliveryContact: s.deliveryContact || '', packages: d.packages || ''
     }, function (o) {
       if (o.day && !o.deliveryAddress && !s.clientId) { toast('Poné la dirección de entrega', true); return Promise.reject(new Error('dir')); }
       return act(api('PUT', '/sales/' + s.id + '/delivery', o), o.day ? 'Entrega programada: ' + deliveryText({ day: o.day, shift: o.shift, truckId: o.truckId }) : 'Entrega quitada');
@@ -804,7 +808,8 @@
         (s.delivery.collected ? '<br><b>Cobró el chofer:</b> ' + money(s.delivery.collected.amount) + ' · ' + esc(s.delivery.collected.method) : '') +
         (s.delivery.failReason ? '<br><span class="warn">No se entregó: ' + esc(s.delivery.failReason) + '</span>' : '')
         : '<span class="muted">sin entrega</span>') +
-      (isAdmin() && s.status !== 'anulada' && (!s.delivery || ['pendiente', 'no_entregada'].indexOf(s.delivery.status) >= 0) ? ' <button class="btn sm" id="chgDeliv">' + (s.delivery ? 'Cambiar entrega' : 'Programar entrega') + '</button>' : '') + '</p>' +
+      (isAdmin() && s.status !== 'anulada' && (!s.delivery || ['pendiente', 'no_entregada'].indexOf(s.delivery.status) >= 0) ? ' <button class="btn sm" id="chgDeliv">' + (s.delivery ? 'Cambiar entrega' : 'Programar entrega') + '</button>' : '') +
+      (isAdmin() && s.delivery && s.status !== 'anulada' && window.SVC.labelsModal ? ' <button class="btn sm" id="lblDeliv">🏷 Etiquetas' + (s.delivery.packages ? ' (' + s.delivery.packages + ')' : '') + '</button>' : '') + '</p>' +
       '<table><thead><tr><th>Producto</th><th class="num">Cant.</th><th class="num">Precio</th><th class="num">IVA</th><th class="num">Importe</th></tr></thead><tbody>' +
       s.items.map(function (it) {
         return '<tr><td>' + esc(it.name) + '</td><td class="num">' + it.qty + '</td><td class="num">' + money(it.price) + '</td><td class="num">' + it.iva + '%</td><td class="num">' + money(it.qty * it.price) + '</td></tr>';
@@ -821,6 +826,7 @@
       bindPrintPicker(m);
       $('#dupSale', m).addEventListener('click', function () { duplicateSale(s); });
       var cd = $('#chgDeliv', m); if (cd) cd.addEventListener('click', function () { deliveryModal(s); });
+      var lb = $('#lblDeliv', m); if (lb) lb.addEventListener('click', function () { window.SVC.labelsForSales([s]); });
       $('#print', m).addEventListener('click', function () { printSale(s, printFormat(printPrefs())); });
       $('#savePdf', m).addEventListener('click', function () {
         var b = this, txt = b.textContent; b.disabled = true; b.textContent = 'Generando…';

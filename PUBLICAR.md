@@ -104,6 +104,11 @@ ventas, clientes, productos ni comisiones fuera de sus pantallas.
 
 - Por ahora la entrega la programa el administrador: Ventas → columna Entrega → "🚚 Programar" (camión, día, turno,
   dirección y teléfono). Sirve para Consumidor final si tiene dirección. El vendedor ve el estado pero no la programa.
+- Envíos sin venta: Logística → "+ Nuevo envío" a un cliente registrado (qué se envía, bultos, día, turno, camión).
+  Se numeran E-1, E-2…, van en la ruta junto con las ventas del mismo cliente, no se cobran y no aparecen en Ventas.
+- Etiquetas: botón 🏷 en cada parada, en cada camión y en Ventas. Se pone a mano la cantidad de bultos y sale una
+  etiqueta por bulto ("Bulto 2 de 3") con cliente, dirección, contacto, día y turno. Formatos: etiquetadora 10 × 7 cm
+  o A4 con 8 por hoja.
 - Logística (menú Logística) elige día y turno, reparte las entregas entre camiones, junta las ventas del mismo cliente en
   una parada, ordena con "Armar mejor ruta" (vecino más cercano + 2-opt desde el depósito) y guarda: el chofer la recibe.
 - El chofer (Mis entregas) toca "Empezar ruta" (aviso "en camino" al vendedor y a los administradores), marca cada
