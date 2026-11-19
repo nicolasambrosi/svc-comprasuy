@@ -376,6 +376,7 @@ ul.plain{margin:6px 0;padding-left:18px}
 .stop-btns .btn{min-height:40px}
 .notices .notice{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--g10)}
 .notices .notice:last-child{border-bottom:0}
+.notices .notice>div{flex:1;min-width:0}
 .notice.unread{font-weight:600}
 .notice.unread::before{content:'';flex:0 0 8px;height:8px;border-radius:50%;background:var(--orange);order:-1}
 @media(max-width:560px){.lg-grid{grid-template-columns:1fr}.stop-row{flex-wrap:wrap}.stop-row select{max-width:none;flex:1}}
